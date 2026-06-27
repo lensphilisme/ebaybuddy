@@ -14,16 +14,426 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      activity_logs: {
+        Row: {
+          category: string
+          created_at: string
+          id: string
+          level: Database["public"]["Enums"]["log_level"]
+          message: string
+          metadata: Json
+          user_id: string
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          id?: string
+          level?: Database["public"]["Enums"]["log_level"]
+          message: string
+          metadata?: Json
+          user_id: string
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          id?: string
+          level?: Database["public"]["Enums"]["log_level"]
+          message?: string
+          metadata?: Json
+          user_id?: string
+        }
+        Relationships: []
+      }
+      automation_rules: {
+        Row: {
+          allow_bold_title: boolean
+          allow_promoted_listings: boolean
+          allow_subtitle: boolean
+          created_at: string
+          ebay_fee_buffer_percent: number
+          end_test_listings_after_success: boolean
+          id: string
+          live_listing_enabled: boolean
+          markup_percent: number
+          max_listing_quantity: number
+          min_profit_usd: number
+          optimizer_low_views_days: number
+          optimizer_no_sales_days: number
+          optimizer_poor_exposure_days: number
+          payment_fee_buffer_percent: number
+          preflight_required: boolean
+          round_to: number
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          allow_bold_title?: boolean
+          allow_promoted_listings?: boolean
+          allow_subtitle?: boolean
+          created_at?: string
+          ebay_fee_buffer_percent?: number
+          end_test_listings_after_success?: boolean
+          id?: string
+          live_listing_enabled?: boolean
+          markup_percent?: number
+          max_listing_quantity?: number
+          min_profit_usd?: number
+          optimizer_low_views_days?: number
+          optimizer_no_sales_days?: number
+          optimizer_poor_exposure_days?: number
+          payment_fee_buffer_percent?: number
+          preflight_required?: boolean
+          round_to?: number
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          allow_bold_title?: boolean
+          allow_promoted_listings?: boolean
+          allow_subtitle?: boolean
+          created_at?: string
+          ebay_fee_buffer_percent?: number
+          end_test_listings_after_success?: boolean
+          id?: string
+          live_listing_enabled?: boolean
+          markup_percent?: number
+          max_listing_quantity?: number
+          min_profit_usd?: number
+          optimizer_low_views_days?: number
+          optimizer_no_sales_days?: number
+          optimizer_poor_exposure_days?: number
+          payment_fee_buffer_percent?: number
+          preflight_required?: boolean
+          round_to?: number
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      cj_products_cache: {
+        Row: {
+          category_id: string | null
+          cj_product_id: string
+          created_at: string
+          id: string
+          image_urls: string[]
+          is_listed: boolean
+          price: number
+          raw: Json
+          supplier_id: string | null
+          title: string
+          updated_at: string
+          user_id: string
+          weight: number | null
+        }
+        Insert: {
+          category_id?: string | null
+          cj_product_id: string
+          created_at?: string
+          id?: string
+          image_urls?: string[]
+          is_listed?: boolean
+          price?: number
+          raw?: Json
+          supplier_id?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+          weight?: number | null
+        }
+        Update: {
+          category_id?: string | null
+          cj_product_id?: string
+          created_at?: string
+          id?: string
+          image_urls?: string[]
+          is_listed?: boolean
+          price?: number
+          raw?: Json
+          supplier_id?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+          weight?: number | null
+        }
+        Relationships: []
+      }
+      ebay_listings: {
+        Row: {
+          cj_landed_cost: number | null
+          cj_product_id: string | null
+          clicks: number
+          created_at: string
+          currency: string
+          draft_id: string | null
+          ebay_item_id: string | null
+          ebay_offer_id: string | null
+          ended_at: string | null
+          id: string
+          last_traffic_check: string | null
+          listed_at: string
+          marketplace_id: string
+          price: number
+          sales: number
+          sku: string
+          status: Database["public"]["Enums"]["listing_status"]
+          title: string
+          updated_at: string
+          user_id: string
+          views: number
+        }
+        Insert: {
+          cj_landed_cost?: number | null
+          cj_product_id?: string | null
+          clicks?: number
+          created_at?: string
+          currency?: string
+          draft_id?: string | null
+          ebay_item_id?: string | null
+          ebay_offer_id?: string | null
+          ended_at?: string | null
+          id?: string
+          last_traffic_check?: string | null
+          listed_at?: string
+          marketplace_id?: string
+          price?: number
+          sales?: number
+          sku: string
+          status?: Database["public"]["Enums"]["listing_status"]
+          title: string
+          updated_at?: string
+          user_id: string
+          views?: number
+        }
+        Update: {
+          cj_landed_cost?: number | null
+          cj_product_id?: string | null
+          clicks?: number
+          created_at?: string
+          currency?: string
+          draft_id?: string | null
+          ebay_item_id?: string | null
+          ebay_offer_id?: string | null
+          ended_at?: string | null
+          id?: string
+          last_traffic_check?: string | null
+          listed_at?: string
+          marketplace_id?: string
+          price?: number
+          sales?: number
+          sku?: string
+          status?: Database["public"]["Enums"]["listing_status"]
+          title?: string
+          updated_at?: string
+          user_id?: string
+          views?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ebay_listings_draft_id_fkey"
+            columns: ["draft_id"]
+            isOneToOne: false
+            referencedRelation: "listing_drafts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      integration_credentials: {
+        Row: {
+          created_at: string
+          credentials: Json
+          environment: string
+          id: string
+          is_active: boolean
+          label: string | null
+          last_error: string | null
+          last_validated_at: string | null
+          provider: Database["public"]["Enums"]["integration_provider"]
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credentials?: Json
+          environment?: string
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          last_error?: string | null
+          last_validated_at?: string | null
+          provider: Database["public"]["Enums"]["integration_provider"]
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credentials?: Json
+          environment?: string
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          last_error?: string | null
+          last_validated_at?: string | null
+          provider?: Database["public"]["Enums"]["integration_provider"]
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      listing_drafts: {
+        Row: {
+          audit_reason: string | null
+          brand: string | null
+          bullet_features: string[]
+          category_id: string | null
+          cj_product_id: string
+          cj_variant_id: string | null
+          condition: string
+          created_at: string
+          description: string
+          duplicate_decision: Json | null
+          ebay_listing_id: string | null
+          id: string
+          images: Json
+          item_specifics: Json
+          market_comparison: Json | null
+          model: string | null
+          price: number
+          profit: Json
+          quantity: number
+          sku: string
+          status: Database["public"]["Enums"]["draft_status"]
+          subtitle: string | null
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          audit_reason?: string | null
+          brand?: string | null
+          bullet_features?: string[]
+          category_id?: string | null
+          cj_product_id: string
+          cj_variant_id?: string | null
+          condition?: string
+          created_at?: string
+          description?: string
+          duplicate_decision?: Json | null
+          ebay_listing_id?: string | null
+          id?: string
+          images?: Json
+          item_specifics?: Json
+          market_comparison?: Json | null
+          model?: string | null
+          price?: number
+          profit?: Json
+          quantity?: number
+          sku: string
+          status?: Database["public"]["Enums"]["draft_status"]
+          subtitle?: string | null
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          audit_reason?: string | null
+          brand?: string | null
+          bullet_features?: string[]
+          category_id?: string | null
+          cj_product_id?: string
+          cj_variant_id?: string | null
+          condition?: string
+          created_at?: string
+          description?: string
+          duplicate_decision?: Json | null
+          ebay_listing_id?: string | null
+          id?: string
+          images?: Json
+          item_specifics?: Json
+          market_comparison?: Json | null
+          model?: string | null
+          price?: number
+          profit?: Json
+          quantity?: number
+          sku?: string
+          status?: Database["public"]["Enums"]["draft_status"]
+          subtitle?: string | null
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          default_ebay_marketplace: string
+          display_name: string | null
+          ebay_environment: string
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          default_ebay_marketplace?: string
+          display_name?: string | null
+          ebay_environment?: string
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          default_ebay_marketplace?: string
+          display_name?: string | null
+          ebay_environment?: string
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "admin" | "user"
+      draft_status: "pending" | "approved" | "rejected" | "pushed" | "failed"
+      integration_provider: "ebay" | "cj" | "ai"
+      listing_status: "active" | "ended" | "sold" | "error"
+      log_level: "info" | "warn" | "error" | "success"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +560,12 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["admin", "user"],
+      draft_status: ["pending", "approved", "rejected", "pushed", "failed"],
+      integration_provider: ["ebay", "cj", "ai"],
+      listing_status: ["active", "ended", "sold", "error"],
+      log_level: ["info", "warn", "error", "success"],
+    },
   },
 } as const
