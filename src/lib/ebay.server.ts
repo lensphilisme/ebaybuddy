@@ -88,7 +88,7 @@ export async function getFreshEbayToken(supabase: any, userId: string) {
   const creds = await getUserEbayCredential(supabase, userId);
   if (creds.access_token && creds.expires_at && creds.expires_at > Date.now()) return creds.access_token;
   const fresh = await refreshEbayAccessToken(creds.refresh_token!);
-  await supabase.from("integration_credentials").upsert({
+  const row = {
     user_id: userId,
     provider: "ebay",
     label: "default",
@@ -96,7 +96,10 @@ export async function getFreshEbayToken(supabase: any, userId: string) {
     is_active: true,
     last_validated_at: new Date().toISOString(),
     credentials: { ...creds, ...fresh },
-  }, { onConflict: "user_id,provider,label" });
+  };
+  const { data: existing } = await supabase.from("integration_credentials").select("id").eq("user_id", userId).eq("provider", "ebay").eq("label", "default").maybeSingle();
+  if (existing?.id) await supabase.from("integration_credentials").update(row).eq("id", existing.id);
+  else await supabase.from("integration_credentials").insert(row);
   return fresh.access_token!;
 }
 

@@ -11,7 +11,7 @@ export const connectEbayWithCode = createServerFn({ method: "POST" })
   .inputValidator((data: { code: string }) => data)
   .handler(async ({ data, context }: any) => {
     const creds = await exchangeEbayCode(decodeURIComponent(data.code.trim()));
-    await context.supabase.from("integration_credentials").upsert({
+    const row = {
       user_id: context.userId,
       provider: "ebay",
       label: "default",
@@ -19,7 +19,10 @@ export const connectEbayWithCode = createServerFn({ method: "POST" })
       is_active: true,
       last_validated_at: new Date().toISOString(),
       credentials: creds,
-    }, { onConflict: "user_id,provider,label" });
+    };
+    const { data: existing } = await context.supabase.from("integration_credentials").select("id").eq("user_id", context.userId).eq("provider", "ebay").eq("label", "default").maybeSingle();
+    if (existing?.id) await context.supabase.from("integration_credentials").update(row).eq("id", existing.id);
+    else await context.supabase.from("integration_credentials").insert(row);
     return { ok: true };
   });
 
