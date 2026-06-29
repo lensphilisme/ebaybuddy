@@ -1,14 +1,206 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
-import { ComingSoon } from "@/components/coming-soon";
-import { PackageSearch } from "lucide-react";
+import { useState, useMemo } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
+import { searchCjProducts } from "@/lib/cj.functions";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Search, Loader2, ChevronLeft, ChevronRight, FileEdit } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/products")({ component: () => (
-  <AppShell title="CJ Products" subtitle="Search and cache CJ Dropshipping inventory">
-    <ComingSoon
-      icon={PackageSearch}
-      title="CJ product search wires up next"
-      body="Once your CJ access token is saved in Settings, this page lets you search by category, country, price, weight, rating and inventory — and turn winners into drafts."
-    />
-  </AppShell>
-) });
+export const Route = createFileRoute("/_authenticated/products")({
+  component: ProductsPage,
+});
+
+const PAGE_SIZES = [10, 20, 40, 50, 100] as const;
+
+function ProductsPage() {
+  const [keyword, setKeyword] = useState("");
+  const [query, setQuery] = useState<{ keyword: string; pageNum: number; pageSize: number }>({
+    keyword: "",
+    pageNum: 1,
+    pageSize: 20,
+  });
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
+  const navigate = useNavigate();
+
+  const searchFn = useServerFn(searchCjProducts);
+  const { data, isFetching, error } = useQuery({
+    queryKey: ["cj-search", query],
+    queryFn: () => searchFn({ data: query }),
+    enabled: query.keyword.length > 0,
+    staleTime: 60_000,
+  });
+
+  const items = data?.list ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
+  const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setQuery((q) => ({ ...q, keyword, pageNum: 1 }));
+    setSelected({});
+  }
+
+  const bulkDraft = useMutation({
+    mutationFn: async () => {
+      const chosen = items.filter((p) => selected[p.pid]);
+      if (chosen.length === 0) throw new Error("Nothing selected");
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth.user) throw new Error("Not signed in");
+      const rows = chosen.map((p) => ({
+        user_id: auth.user!.id,
+        cj_product_id: p.pid,
+        sku: p.productSku || p.pid,
+        title: (p.productNameEn || "").slice(0, 80),
+        price: Number(p.sellPrice) || 0,
+        images: [p.productImage].filter(Boolean),
+        status: "pending" as const,
+      }));
+      const { error } = await supabase.from("listing_drafts").upsert(rows, {
+        onConflict: "user_id,cj_product_id",
+        ignoreDuplicates: true,
+      });
+      if (error) throw error;
+      return chosen.length;
+    },
+    onSuccess: (n) => {
+      toast.success(`Added ${n} product${n === 1 ? "" : "s"} to drafts`);
+      setSelected({});
+      navigate({ to: "/drafts" });
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  return (
+    <AppShell title="CJ Products" subtitle="Search inventory and send winners to your draft queue">
+      <form onSubmit={submit} className="flex flex-col md:flex-row gap-2 mb-4">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            placeholder="Search CJ Dropshipping (e.g. wireless earbuds, kitchen gadget…)"
+            className="pl-9"
+          />
+        </div>
+        <Select
+          value={String(query.pageSize)}
+          onValueChange={(v) => setQuery((q) => ({ ...q, pageSize: Number(v), pageNum: 1 }))}
+        >
+          <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {PAGE_SIZES.map((n) => <SelectItem key={n} value={String(n)}>{n} / page</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Button type="submit" disabled={isFetching}>
+          {isFetching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Search"}
+        </Button>
+      </form>
+
+      {error ? (
+        <Card className="p-6 border-destructive/40 bg-destructive/5 text-sm text-destructive">
+          {(error as Error).message}
+        </Card>
+      ) : null}
+
+      {selectedIds.length > 0 && (
+        <div className="sticky top-16 z-20 mb-4 flex items-center gap-3 bg-card border rounded-lg px-4 py-2 shadow-sm">
+          <span className="text-sm font-medium">{selectedIds.length} selected</span>
+          <Button size="sm" variant="ghost" onClick={() => setSelected({})}>Clear</Button>
+          <div className="flex-1" />
+          <Button size="sm" onClick={() => bulkDraft.mutate()} disabled={bulkDraft.isPending}>
+            <FileEdit className="h-4 w-4 mr-1" />
+            {bulkDraft.isPending ? "Adding…" : "Send to Drafts"}
+          </Button>
+        </div>
+      )}
+
+      {isFetching && items.length === 0 ? (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {Array.from({ length: query.pageSize > 12 ? 12 : query.pageSize }).map((_, i) => (
+            <Card key={i} className="aspect-[3/4] animate-pulse bg-muted/40" />
+          ))}
+        </div>
+      ) : items.length === 0 ? (
+        <Card className="p-12 text-center text-sm text-muted-foreground">
+          {query.keyword ? "No products matched your search." : "Enter a search term to browse CJ inventory."}
+        </Card>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {items.map((p) => {
+              const checked = !!selected[p.pid];
+              return (
+                <Card key={p.pid} className={`group relative overflow-hidden transition ${checked ? "ring-2 ring-primary" : ""}`}>
+                  <div className="absolute top-2 left-2 z-10">
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={(v) => setSelected((s) => ({ ...s, [p.pid]: !!v }))}
+                      className="bg-background/90 border-border"
+                    />
+                  </div>
+                  <Link
+                    to="/products/$pid"
+                    params={{ pid: p.pid }}
+                    className="block"
+                  >
+                    <div className="aspect-square bg-muted overflow-hidden">
+                      {p.productImage && (
+                        <img
+                          src={p.productImage}
+                          alt={p.productNameEn}
+                          loading="lazy"
+                          className="h-full w-full object-cover group-hover:scale-105 transition-transform"
+                        />
+                      )}
+                    </div>
+                    <div className="p-3">
+                      <p className="text-sm font-medium line-clamp-2 leading-snug min-h-[2.5rem]">{p.productNameEn}</p>
+                      <div className="mt-2 flex items-center justify-between">
+                        <span className="font-semibold text-primary">${Number(p.sellPrice).toFixed(2)}</span>
+                        {p.categoryName && (
+                          <Badge variant="secondary" className="text-[10px] truncate max-w-[60%]">{p.categoryName}</Badge>
+                        )}
+                      </div>
+                    </div>
+                  </Link>
+                </Card>
+              );
+            })}
+          </div>
+
+          {/* Pagination */}
+          <div className="mt-6 flex items-center justify-between flex-wrap gap-3">
+            <div className="text-xs text-muted-foreground">
+              Page {query.pageNum} of {totalPages} · {total.toLocaleString()} results
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline" size="sm"
+                disabled={query.pageNum <= 1 || isFetching}
+                onClick={() => setQuery((q) => ({ ...q, pageNum: q.pageNum - 1 }))}
+              >
+                <ChevronLeft className="h-4 w-4" /> Prev
+              </Button>
+              <Button
+                variant="outline" size="sm"
+                disabled={query.pageNum >= totalPages || isFetching}
+                onClick={() => setQuery((q) => ({ ...q, pageNum: q.pageNum + 1 }))}
+              >
+                Next <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </>
+      )}
+    </AppShell>
+  );
+}
