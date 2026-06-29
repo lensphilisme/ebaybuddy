@@ -1,0 +1,1 @@
+ALTER TABLE public.listing_drafts ADD CONSTRAINT listing_drafts_user_product_unique UNIQUE (user_id, cj_product_id);
