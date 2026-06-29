@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -34,6 +34,7 @@ function ProductDetailPage() {
   const { pid } = Route.useParams();
   const productFn = useServerFn(getCjProduct);
   const freightFn = useServerFn(getCjFreight);
+  const navigate = useNavigate();
 
   const { data: p, isLoading, error } = useQuery({
     queryKey: ["cj-product", pid],
@@ -49,9 +50,10 @@ function ProductDetailPage() {
   const images = useMemo(() => {
     if (!p) return [] as string[];
     const all = new Set<string>();
+    if (p.bigImage) all.add(p.bigImage);
     if (p.productImage) all.add(p.productImage);
-    (p.productImageSet ?? []).forEach((u) => u && all.add(u));
-    (p.productImages ?? []).forEach((u) => u && all.add(u));
+    (Array.isArray(p.productImageSet) ? p.productImageSet : []).forEach((u) => u && all.add(u));
+    (Array.isArray(p.productImages) ? p.productImages : []).forEach((u) => u && all.add(u));
     variants.forEach((v) => v.variantImage && all.add(v.variantImage));
     return Array.from(all);
   }, [p, variants]);
@@ -113,7 +115,10 @@ function ProductDetailPage() {
       }, { onConflict: "user_id,cj_product_id" });
       if (error) throw error;
     },
-    onSuccess: () => toast.success("Draft saved"),
+    onSuccess: () => {
+      toast.success("Draft saved");
+      navigate({ to: "/drafts" });
+    },
     onError: (e: Error) => toast.error(e.message),
   });
 
