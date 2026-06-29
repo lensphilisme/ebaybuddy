@@ -60,7 +60,7 @@ function SettingsPage() {
   );
 }
 
-function IntegrationCard({ icon: Icon, title, desc, status, ready }: {
+function IntegrationCard({ icon: Icon, title, desc, status, ready, children }: {
   icon: typeof KeyRound; title: string; desc: string; status: string; ready?: boolean; children?: React.ReactNode;
 }) {
   return (
