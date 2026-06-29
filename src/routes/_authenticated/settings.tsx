@@ -8,7 +8,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { connectEbayWithCode, getEbayConnectUrl } from "@/lib/ebay.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { KeyRound, Boxes, Tag } from "lucide-react";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/settings")({
@@ -61,7 +61,7 @@ function SettingsPage() {
 }
 
 function IntegrationCard({ icon: Icon, title, desc, status, ready, children }: {
-  icon: typeof KeyRound; title: string; desc: string; status: string; ready?: boolean; children?: React.ReactNode;
+  icon: typeof KeyRound; title: string; desc: string; status: string; ready?: boolean; children?: ReactNode;
 }) {
   return (
     <Card className="shadow-[var(--shadow-card)]">
