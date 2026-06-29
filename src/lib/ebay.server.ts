@@ -123,7 +123,6 @@ export type EbayActiveListing = {
 export async function fetchActiveEbayListings(accessToken: string, pageNumber = 1, entriesPerPage = 100) {
   const xml = `<?xml version="1.0" encoding="utf-8"?>
   <GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-    <RequesterCredentials><eBayAuthToken>${accessToken}</eBayAuthToken></RequesterCredentials>
     <ErrorLanguage>en_US</ErrorLanguage><WarningLevel>High</WarningLevel>
     <ActiveList><Include>true</Include><Pagination><EntriesPerPage>${entriesPerPage}</EntriesPerPage><PageNumber>${pageNumber}</PageNumber></Pagination></ActiveList>
     <DetailLevel>ReturnAll</DetailLevel>
@@ -178,6 +177,7 @@ export async function getCategorySuggestions(accessToken: string, q: string, mar
 }
 
 export async function publishInventoryItem(accessToken: string, draft: any) {
+  const policies = await fetchDefaultSellerPolicies(accessToken);
   const sku = draft.sku || `cj-${draft.cj_product_id}`;
   const aspects = Object.fromEntries(Object.entries(draft.item_specifics || {}).map(([k, v]) => [k, Array.isArray(v) ? v : [String(v)]]));
   const itemBody = {
@@ -204,7 +204,7 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
     availableQuantity: Number(draft.quantity || 1),
     categoryId: draft.category_id,
     listingDescription: draft.description || draft.title,
-    listingPolicies: {},
+    listingPolicies: policies,
     pricingSummary: { price: { value: String(Number(draft.price || 0).toFixed(2)), currency: "USD" } },
   };
   const offer = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`, {
@@ -222,4 +222,30 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
   const publishJson = await publish.json().catch(() => ({}));
   if (!publish.ok) throw new Error(`eBay publish failed: ${publishJson.message || JSON.stringify(publishJson)}`);
   return { offerId, listingId: publishJson.listingId };
+}
+
+async function firstPolicy(accessToken: string, kind: "fulfillment" | "payment" | "return") {
+  const res = await fetch(`${EBAY_API_BASE}/sell/account/v1/${kind}_policy?marketplace_id=EBAY_US`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`eBay ${kind} policy lookup failed: ${json.message || JSON.stringify(json)}`);
+  const list = json[`${kind}Policies`] || [];
+  return list.find((p: any) => p.categoryTypes?.some((c: any) => c.default)) || list[0];
+}
+
+async function fetchDefaultSellerPolicies(accessToken: string) {
+  const [fulfillment, payment, returns] = await Promise.all([
+    firstPolicy(accessToken, "fulfillment"),
+    firstPolicy(accessToken, "payment"),
+    firstPolicy(accessToken, "return"),
+  ]);
+  if (!fulfillment?.fulfillmentPolicyId || !payment?.paymentPolicyId || !returns?.returnPolicyId) {
+    throw new Error("Create default eBay Business Policies first: fulfillment, payment, and return policy are required.");
+  }
+  return {
+    fulfillmentPolicyId: fulfillment.fulfillmentPolicyId,
+    paymentPolicyId: payment.paymentPolicyId,
+    returnPolicyId: returns.returnPolicyId,
+  };
 }
