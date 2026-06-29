@@ -3,7 +3,7 @@
 
 const CJ_BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 
-type CjEnvelope<T> = { code: number; result: boolean; message: string; data: T };
+type CjEnvelope<T> = { code: number; result?: boolean; success?: boolean; message: string; data: T };
 
 async function cjFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = process.env.CJ_ACCESS_TOKEN;
@@ -23,11 +23,27 @@ async function cjFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   } catch {
     throw new Error(`CJ non-JSON response (${res.status}): ${text.slice(0, 200)}`);
   }
-  if (!json.result) {
+  if (json.result === false || json.success === false || (json.code && json.code !== 200)) {
     throw new Error(`CJ error ${json.code}: ${json.message}`);
   }
   return json.data;
 }
+
+export type CjCategoryTree = {
+  categoryFirstName: string;
+  categoryFirstList?: {
+    categorySecondName: string;
+    categorySecondList?: { categoryId: string; categoryName: string }[];
+  }[];
+};
+
+export type CjWarehouse = {
+  countryCode: string;
+  nameEn?: string;
+  areaEn?: string;
+  valueEn?: string;
+  disabled?: boolean;
+};
 
 export type CjListItem = {
   pid: string;
@@ -89,6 +105,7 @@ export type CjProductDetail = {
   pid: string;
   productNameEn: string;
   productSku: string;
+  bigImage?: string;
   productImage: string;
   productImageSet?: string[];
   productImages?: string[];
@@ -99,14 +116,25 @@ export type CjProductDetail = {
   categoryName?: string;
   productType?: string;
   productKeyEn?: string;
+  productProEnSet?: string[];
+  packingWeight?: string | number;
   variants?: CjVariant[];
   // some endpoints return "variantList" or "productVariants"
   variantList?: CjVariant[];
   productVariants?: CjVariant[];
 };
 
-export async function cjProductDetail(pid: string): Promise<CjProductDetail> {
-  const q = new URLSearchParams({ pid });
+export async function cjGetCategories(): Promise<CjCategoryTree[]> {
+  return cjFetch<CjCategoryTree[]>("/product/getCategory");
+}
+
+export async function cjGetWarehouses(): Promise<CjWarehouse[]> {
+  return cjFetch<CjWarehouse[]>("/product/globalWarehouseList");
+}
+
+export async function cjProductDetail(pid: string, countryCode?: string): Promise<CjProductDetail> {
+  const q = new URLSearchParams({ pid, features: "enable_combine,enable_video" });
+  if (countryCode) q.set("countryCode", countryCode);
   return cjFetch<CjProductDetail>(`/product/query?${q}`);
 }
 

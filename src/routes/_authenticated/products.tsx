@@ -3,7 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { useState, useMemo } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { searchCjProducts } from "@/lib/cj.functions";
+import { getCjCategories, searchCjProducts } from "@/lib/cj.functions";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -22,19 +22,35 @@ const PAGE_SIZES = [10, 20, 40, 50, 100] as const;
 
 function ProductsPage() {
   const [keyword, setKeyword] = useState("");
-  const [query, setQuery] = useState<{ keyword: string; pageNum: number; pageSize: number }>({
+  const [query, setQuery] = useState<{ keyword: string; pageNum: number; pageSize: number; categoryId?: string; countryCode?: string }>({
     keyword: "",
     pageNum: 1,
     pageSize: 20,
   });
+  const [categoryId, setCategoryId] = useState("all");
+  const [countryCode, setCountryCode] = useState("all");
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
 
   const searchFn = useServerFn(searchCjProducts);
+  const categoriesFn = useServerFn(getCjCategories);
+  const { data: categories } = useQuery({
+    queryKey: ["cj-categories"],
+    queryFn: () => categoriesFn(),
+    staleTime: 24 * 60 * 60_000,
+  });
+  const flatCategories = useMemo(() => (categories ?? []).flatMap((first: any) =>
+    (first.categoryFirstList ?? []).flatMap((second: any) =>
+      (second.categorySecondList ?? []).map((third: any) => ({
+        id: third.categoryId,
+        name: `${first.categoryFirstName} / ${second.categorySecondName} / ${third.categoryName}`,
+      })),
+    ),
+  ), [categories]);
   const { data, isFetching, error } = useQuery({
     queryKey: ["cj-search", query],
     queryFn: () => searchFn({ data: query }),
-    enabled: query.keyword.length > 0,
+    enabled: query.keyword.length > 0 || !!query.categoryId,
     staleTime: 60_000,
   });
 
@@ -45,7 +61,13 @@ function ProductsPage() {
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    setQuery((q) => ({ ...q, keyword, pageNum: 1 }));
+    setQuery((q) => ({
+      ...q,
+      keyword,
+      categoryId: categoryId === "all" ? undefined : categoryId,
+      countryCode: countryCode === "all" ? undefined : countryCode,
+      pageNum: 1,
+    }));
     setSelected({});
   }
 
@@ -91,6 +113,21 @@ function ProductsPage() {
             className="pl-9"
           />
         </div>
+        <Select value={countryCode} onValueChange={setCountryCode}>
+          <SelectTrigger className="md:w-36"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Any warehouse</SelectItem>
+            <SelectItem value="CN">CN stock</SelectItem>
+            <SelectItem value="US">US stock</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={categoryId} onValueChange={setCategoryId}>
+          <SelectTrigger className="md:w-72"><SelectValue placeholder="CJ category tree" /></SelectTrigger>
+          <SelectContent className="max-h-80">
+            <SelectItem value="all">All CJ categories</SelectItem>
+            {flatCategories.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <Select
           value={String(query.pageSize)}
           onValueChange={(v) => setQuery((q) => ({ ...q, pageSize: Number(v), pageNum: 1 }))}
@@ -131,7 +168,7 @@ function ProductsPage() {
         </div>
       ) : items.length === 0 ? (
         <Card className="p-12 text-center text-sm text-muted-foreground">
-          {query.keyword ? "No products matched your search." : "Enter a search term to browse CJ inventory."}
+          {query.keyword || query.categoryId ? "No products matched your search." : "Enter a search term or choose a CJ category to browse inventory."}
         </Card>
       ) : (
         <>
