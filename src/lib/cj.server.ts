@@ -5,9 +5,9 @@ const CJ_BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 
 type CjEnvelope<T> = { code: number; result?: boolean; success?: boolean; message: string; data: T };
 
-async function cjFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = process.env.CJ_ACCESS_TOKEN;
-  if (!token) throw new Error("CJ_ACCESS_TOKEN is not configured");
+async function cjFetch<T>(path: string, init: RequestInit = {}, overrideToken?: string): Promise<T> {
+  const token = overrideToken || process.env.CJ_ACCESS_TOKEN;
+  if (!token) throw new Error("CJ access token is not configured. Add it under Settings → CJ Dropshipping.");
   const res = await fetch(`${CJ_BASE}${path}`, {
     ...init,
     headers: {
@@ -27,6 +27,17 @@ async function cjFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(`CJ error ${json.code}: ${json.message}`);
   }
   return json.data;
+}
+
+export async function getUserCjToken(supabase: any, userId: string): Promise<string | undefined> {
+  const { data } = await supabase
+    .from("integration_credentials")
+    .select("credentials")
+    .eq("user_id", userId)
+    .eq("provider", "cj")
+    .eq("label", "default")
+    .maybeSingle();
+  return data?.credentials?.access_token || process.env.CJ_ACCESS_TOKEN;
 }
 
 export type CjCategoryTree = {
