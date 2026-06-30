@@ -229,7 +229,13 @@ async function firstPolicy(accessToken: string, kind: "fulfillment" | "payment" 
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`eBay ${kind} policy lookup failed: ${json.message || JSON.stringify(json)}`);
+  if (!res.ok) {
+    const detail = json?.errors?.[0]?.longMessage || json?.message || JSON.stringify(json);
+    if (/Business Policy/i.test(detail)) {
+      throw new Error("Your eBay account is not opted in to Business Policies. Visit https://www.bizpolicy.ebay.com/businesspolicy/manage to opt in, then create default payment, shipping and return policies before pushing listings.");
+    }
+    throw new Error(`eBay ${kind} policy lookup failed: ${detail}`);
+  }
   const list = json[`${kind}Policies`] || [];
   return list.find((p: any) => p.categoryTypes?.some((c: any) => c.default)) || list[0];
 }
@@ -241,7 +247,7 @@ async function fetchDefaultSellerPolicies(accessToken: string) {
     firstPolicy(accessToken, "return"),
   ]);
   if (!fulfillment?.fulfillmentPolicyId || !payment?.paymentPolicyId || !returns?.returnPolicyId) {
-    throw new Error("Create default eBay Business Policies first: fulfillment, payment, and return policy are required.");
+    throw new Error("eBay Business Policies are required. Opt in at https://www.bizpolicy.ebay.com/businesspolicy/manage and create a default payment, shipping (fulfillment) and return policy, then retry.");
   }
   return {
     fulfillmentPolicyId: fulfillment.fulfillmentPolicyId,

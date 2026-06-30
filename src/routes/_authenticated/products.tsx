@@ -77,15 +77,33 @@ function ProductsPage() {
       if (chosen.length === 0) throw new Error("Nothing selected");
       const { data: auth } = await supabase.auth.getUser();
       if (!auth.user) throw new Error("Not signed in");
-      const rows = chosen.map((p) => ({
-        user_id: auth.user!.id,
-        cj_product_id: p.pid,
-        sku: p.productSku || p.pid,
-        title: (p.productNameEn || "").slice(0, 80),
-        price: Number(p.sellPrice) || 0,
-        images: [p.productImage].filter(Boolean),
-        status: "pending" as const,
-      }));
+      const { data: rule } = await supabase.from("automation_rules").select("markup_percent,ebay_fee_buffer_percent").maybeSingle();
+      const markupPct = Number(rule?.markup_percent ?? 50);
+      const feePct = Number(rule?.ebay_fee_buffer_percent ?? 17) / 100;
+      const rows = chosen.map((p) => {
+        const itemCost = Number(p.sellPrice) || 0;
+        // Conservative shipping estimate of 20% of item cost when no freight quote yet
+        const shipping = itemCost * 0.2;
+        const landed = itemCost + shipping;
+        const withMarkup = landed * (1 + markupPct / 100);
+        const finalSell = withMarkup / (1 - feePct);
+        return {
+          user_id: auth.user!.id,
+          cj_product_id: p.pid,
+          sku: p.productSku || p.pid,
+          title: (p.productNameEn || "").slice(0, 80),
+          price: Number(finalSell.toFixed(2)),
+          images: [p.productImage].filter(Boolean),
+          status: "pending" as const,
+          profit: {
+            item_cost: itemCost,
+            shipping_estimate: Number(shipping.toFixed(2)),
+            markup_pct: markupPct,
+            ebay_fee_pct: feePct,
+            note: "Estimated; refine on product detail with live freight quote.",
+          },
+        };
+      });
       const { error } = await supabase.from("listing_drafts").upsert(rows, {
         onConflict: "user_id,cj_product_id",
         ignoreDuplicates: true,
@@ -94,7 +112,7 @@ function ProductsPage() {
       return chosen.length;
     },
     onSuccess: (n) => {
-      toast.success(`Added ${n} product${n === 1 ? "" : "s"} to drafts`);
+      toast.success(`Added ${n} product${n === 1 ? "" : "s"} to drafts with calculated final price`);
       setSelected({});
       navigate({ to: "/drafts" });
     },

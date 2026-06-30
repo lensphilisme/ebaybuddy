@@ -5,9 +5,9 @@ const CJ_BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 
 type CjEnvelope<T> = { code: number; result?: boolean; success?: boolean; message: string; data: T };
 
-async function cjFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const token = process.env.CJ_ACCESS_TOKEN;
-  if (!token) throw new Error("CJ_ACCESS_TOKEN is not configured");
+async function cjFetch<T>(path: string, init: RequestInit = {}, overrideToken?: string): Promise<T> {
+  const token = overrideToken || process.env.CJ_ACCESS_TOKEN;
+  if (!token) throw new Error("CJ access token is not configured. Add it under Settings → CJ Dropshipping.");
   const res = await fetch(`${CJ_BASE}${path}`, {
     ...init,
     headers: {
@@ -27,6 +27,17 @@ async function cjFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(`CJ error ${json.code}: ${json.message}`);
   }
   return json.data;
+}
+
+export async function getUserCjToken(supabase: any, userId: string): Promise<string | undefined> {
+  const { data } = await supabase
+    .from("integration_credentials")
+    .select("credentials")
+    .eq("user_id", userId)
+    .eq("provider", "cj")
+    .eq("label", "default")
+    .maybeSingle();
+  return data?.credentials?.access_token || process.env.CJ_ACCESS_TOKEN;
 }
 
 export type CjCategoryTree = {
@@ -75,7 +86,7 @@ export async function cjSearchProducts(params: {
   countryCode?: string;
   minPrice?: number;
   maxPrice?: number;
-}): Promise<CjListResponse> {
+}, token?: string): Promise<CjListResponse> {
   const q = new URLSearchParams();
   q.set("pageNum", String(params.pageNum ?? 1));
   q.set("pageSize", String(params.pageSize ?? 20));
@@ -84,7 +95,7 @@ export async function cjSearchProducts(params: {
   if (params.countryCode) q.set("countryCode", params.countryCode);
   if (params.minPrice != null) q.set("minPrice", String(params.minPrice));
   if (params.maxPrice != null) q.set("maxPrice", String(params.maxPrice));
-  return cjFetch<CjListResponse>(`/product/list?${q}`);
+  return cjFetch<CjListResponse>(`/product/list?${q}`, {}, token);
 }
 
 export type CjVariant = {
@@ -124,33 +135,33 @@ export type CjProductDetail = {
   productVariants?: CjVariant[];
 };
 
-export async function cjGetCategories(): Promise<CjCategoryTree[]> {
-  return cjFetch<CjCategoryTree[]>("/product/getCategory");
+export async function cjGetCategories(token?: string): Promise<CjCategoryTree[]> {
+  return cjFetch<CjCategoryTree[]>("/product/getCategory", {}, token);
 }
 
-export async function cjGetWarehouses(): Promise<CjWarehouse[]> {
-  return cjFetch<CjWarehouse[]>("/product/globalWarehouseList");
+export async function cjGetWarehouses(token?: string): Promise<CjWarehouse[]> {
+  return cjFetch<CjWarehouse[]>("/product/globalWarehouseList", {}, token);
 }
 
-export async function cjProductDetail(pid: string, countryCode?: string): Promise<CjProductDetail> {
+export async function cjProductDetail(pid: string, countryCode?: string, token?: string): Promise<CjProductDetail> {
   const q = new URLSearchParams({ pid, features: "enable_combine,enable_video" });
   if (countryCode) q.set("countryCode", countryCode);
-  return cjFetch<CjProductDetail>(`/product/query?${q}`);
+  return cjFetch<CjProductDetail>(`/product/query?${q}`, {}, token);
 }
 
 export type CjFreightOption = {
   logisticName: string;
   logisticPrice: number;
-  logisticAging: string; // e.g. "7-15"
+  logisticAging: string;
   logisticWeight?: number;
   trackInfo?: string;
 };
 
 export async function cjFreightCalculate(params: {
-  startCountryCode?: string; // default "CN"
-  endCountryCode: string; // e.g. "US"
+  startCountryCode?: string;
+  endCountryCode: string;
   products: { vid: string; quantity: number }[];
-}): Promise<CjFreightOption[]> {
+}, token?: string): Promise<CjFreightOption[]> {
   const body = {
     startCountryCode: params.startCountryCode ?? "CN",
     endCountryCode: params.endCountryCode,
@@ -159,5 +170,5 @@ export async function cjFreightCalculate(params: {
   return cjFetch<CjFreightOption[]>("/logistic/freightCalculate", {
     method: "POST",
     body: JSON.stringify(body),
-  });
+  }, token);
 }
