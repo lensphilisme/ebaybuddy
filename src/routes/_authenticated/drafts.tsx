@@ -23,6 +23,7 @@ function DraftsPage() {
   const optimizeFn = useServerFn(optimizeDraftWithAi);
   const suggestFn = useServerFn(suggestEbayCategories);
   const pushFn = useServerFn(pushDraftsToEbay);
+  const aiCatFn = useServerFn(aiDeepCategorySuggest);
 
   const { data: drafts = [], refetch, isLoading } = useQuery({
     queryKey: ["listing-drafts"],
