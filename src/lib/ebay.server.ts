@@ -176,6 +176,26 @@ export async function getCategorySuggestions(accessToken: string, q: string, mar
   }));
 }
 
+async function findOfferBySku(accessToken: string, sku: string): Promise<{ offerId: string; listing?: { listingId?: string }; status?: string } | null> {
+  const res = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) return null;
+  const json = await res.json().catch(() => ({}));
+  const list = json.offers || [];
+  return list[0] || null;
+}
+
+async function extractOfferIdFromError(offerJson: any): Promise<string | null> {
+  const errs = offerJson?.errors || [];
+  for (const e of errs) {
+    for (const p of e.parameters || []) {
+      if (p.name === "offerId" && p.value) return String(p.value);
+    }
+  }
+  return null;
+}
+
 export async function publishInventoryItem(accessToken: string, draft: any) {
   const policies = await fetchDefaultSellerPolicies(accessToken);
   const sku = draft.sku || `cj-${draft.cj_product_id}`;
@@ -197,7 +217,7 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
   });
   if (!put.ok) throw new Error(`eBay inventory item failed: ${await put.text()}`);
 
-  const offerBody = {
+  const offerBody: any = {
     sku,
     marketplaceId: "EBAY_US",
     format: "FIXED_PRICE",
@@ -207,21 +227,78 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
     listingPolicies: policies,
     pricingSummary: { price: { value: String(Number(draft.price || 0).toFixed(2)), currency: "USD" } },
   };
-  const offer = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`, {
+
+  let offerId: string | null = null;
+  const createRes = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US" },
     body: JSON.stringify(offerBody),
   });
-  const offerJson = await offer.json().catch(() => ({}));
-  if (!offer.ok) throw new Error(`eBay offer failed: ${offerJson.message || JSON.stringify(offerJson)}`);
-  const offerId = offerJson.offerId;
+  const createJson = await createRes.json().catch(() => ({}));
+  if (createRes.ok) {
+    offerId = createJson.offerId;
+  } else {
+    // Handle "Offer entity already exists" (25002) — grab the existing offerId and update it.
+    const existingId = await extractOfferIdFromError(createJson);
+    const found = existingId ? { offerId: existingId } : await findOfferBySku(accessToken, sku);
+    if (!found?.offerId) {
+      throw new Error(`eBay offer failed: ${createJson.errors?.[0]?.longMessage || createJson.message || JSON.stringify(createJson)}`);
+    }
+    offerId = found.offerId;
+    const updateRes = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US" },
+      body: JSON.stringify(offerBody),
+    });
+    if (!updateRes.ok) {
+      const upTxt = await updateRes.text();
+      throw new Error(`eBay offer update failed: ${upTxt}`);
+    }
+  }
+
   const publish = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}/publish`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
   });
   const publishJson = await publish.json().catch(() => ({}));
-  if (!publish.ok) throw new Error(`eBay publish failed: ${publishJson.message || JSON.stringify(publishJson)}`);
-  return { offerId, listingId: publishJson.listingId };
+  if (!publish.ok) {
+    // If already published, look up the listingId from the offer record and treat as success.
+    const alreadyPublished = (publishJson.errors || []).some((e: any) => /already.*published|listing.*already/i.test(e.longMessage || e.message || ""));
+    if (alreadyPublished) {
+      const existing = await findOfferBySku(accessToken, sku);
+      return { offerId: offerId!, listingId: existing?.listing?.listingId || null };
+    }
+    throw new Error(`eBay publish failed: ${publishJson.errors?.[0]?.longMessage || publishJson.message || JSON.stringify(publishJson)}`);
+  }
+  return { offerId: offerId!, listingId: publishJson.listingId };
+}
+
+// Fetch the full first-two levels of the eBay category tree for a marketplace.
+// Used by the AI deep-category picker as a fallback when normal suggestions are wrong.
+export async function getEbayCategoryTreeShallow(accessToken: string, marketplaceId = "EBAY_US") {
+  const treeRes = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${marketplaceId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const treeMeta = await treeRes.json();
+  if (!treeRes.ok) throw new Error(`eBay category tree error: ${treeMeta.message || treeRes.statusText}`);
+  const full = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/category_tree/${treeMeta.categoryTreeId}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const fullJson = await full.json();
+  if (!full.ok) throw new Error(`eBay tree fetch error: ${fullJson.message || full.statusText}`);
+  const rows: { categoryId: string; path: string; leaf: boolean }[] = [];
+  const walk = (node: any, path: string[], depth: number) => {
+    const name = node?.category?.categoryName;
+    const id = node?.category?.categoryId;
+    const nextPath = name ? [...path, name] : path;
+    const leaf = !!node?.leafCategoryTreeNode;
+    if (id && depth >= 1) rows.push({ categoryId: id, path: nextPath.join(" > "), leaf });
+    if (node?.childCategoryTreeNodes && depth < 3) {
+      for (const c of node.childCategoryTreeNodes) walk(c, nextPath, depth + 1);
+    }
+  };
+  walk(fullJson.rootCategoryNode, [], 0);
+  return { treeId: treeMeta.categoryTreeId, categories: rows };
 }
 
 async function firstPolicy(accessToken: string, kind: "fulfillment" | "payment" | "return") {
