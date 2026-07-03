@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { connectEbayWithCode, getEbayConnectUrl } from "@/lib/ebay.functions";
-import { saveCjToken } from "@/lib/cj.functions";
+import { saveCjToken, getIntegrationStatus } from "@/lib/cj.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { KeyRound, Boxes, Tag, ExternalLink } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -20,16 +20,14 @@ function SettingsPage() {
   const urlFn = useServerFn(getEbayConnectUrl);
   const connectFn = useServerFn(connectEbayWithCode);
   const cjSaveFn = useServerFn(saveCjToken);
+  const statusFn = useServerFn(getIntegrationStatus);
 
-  const { data: creds, refetch } = useQuery({
-    queryKey: ["integration-credentials"],
-    queryFn: async () => {
-      const { data } = await supabase.from("integration_credentials").select("provider,is_active,last_validated_at");
-      return data || [];
-    },
+  const { data: status, refetch } = useQuery({
+    queryKey: ["integration-status"],
+    queryFn: () => statusFn(),
   });
-  const ebayCred = creds?.find((c) => c.provider === "ebay");
-  const cjCred = creds?.find((c) => c.provider === "cj");
+  const ebayCred = { is_active: !!status?.ebay.connected, source: status?.ebay.source };
+  const cjCred = { is_active: !!status?.cj.connected, source: status?.cj.source };
 
   const openOAuth = useMutation({
     mutationFn: () => urlFn(),
