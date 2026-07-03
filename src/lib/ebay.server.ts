@@ -212,7 +212,7 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
   };
   const put = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
     method: "PUT",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US" },
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
     body: JSON.stringify(itemBody),
   });
   if (!put.ok) throw new Error(`eBay inventory item failed: ${await put.text()}`);
@@ -231,7 +231,7 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
   let offerId: string | null = null;
   const createRes = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US" },
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
     body: JSON.stringify(offerBody),
   });
   const createJson = await createRes.json().catch(() => ({}));
@@ -247,7 +247,7 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
     offerId = found.offerId;
     const updateRes = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, {
       method: "PUT",
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US" },
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
       body: JSON.stringify(offerBody),
     });
     if (!updateRes.ok) {
@@ -258,7 +258,7 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
 
   const publish = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}/publish`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Accept-Language": "en-US" },
   });
   const publishJson = await publish.json().catch(() => ({}));
   if (!publish.ok) {
