@@ -60,3 +60,18 @@ export const saveCjToken = createServerFn({ method: "POST" })
     else await context.supabase.from("integration_credentials").insert(row);
     return { ok: true };
   });
+
+// Reports connection status considering per-user creds first, then env fallback.
+export const getIntegrationStatus = createServerFn({ method: "GET" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }: any) => {
+    const { data } = await context.supabase.from("integration_credentials").select("provider,is_active,last_validated_at,credentials").eq("user_id", context.userId);
+    const cjRow = data?.find((r: any) => r.provider === "cj");
+    const ebayRow = data?.find((r: any) => r.provider === "ebay");
+    const cjConnected = !!(cjRow?.is_active && cjRow.credentials?.access_token) || !!process.env.CJ_ACCESS_TOKEN;
+    const ebayConnected = !!(ebayRow?.is_active && ebayRow.credentials?.refresh_token) || !!process.env.EBAY_USER_REFRESH_TOKEN;
+    return {
+      cj: { connected: cjConnected, source: cjRow?.credentials?.access_token ? "user" : cjConnected ? "env" : null, last: cjRow?.last_validated_at || null },
+      ebay: { connected: ebayConnected, source: ebayRow?.credentials?.refresh_token ? "user" : ebayConnected ? "env" : null, last: ebayRow?.last_validated_at || null },
+    };
+  });

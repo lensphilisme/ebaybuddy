@@ -28,30 +28,41 @@ export const connectEbayWithCode = createServerFn({ method: "POST" })
 
 export const syncEbayListings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { pageNumber?: number; entriesPerPage?: number }) => data)
+  .inputValidator((data: { entriesPerPage?: number }) => data)
   .handler(async ({ data, context }: any) => {
     const token = await getFreshEbayToken(context.supabase, context.userId);
-    const result = await fetchActiveEbayListings(token, data.pageNumber ?? 1, data.entriesPerPage ?? 100);
-    for (const item of result.items) {
-      const row = {
-        user_id: context.userId,
-        ebay_item_id: item.itemId,
-        ebay_offer_id: null,
-        sku: item.sku,
-        title: item.title,
-        price: item.price,
-        currency: item.currency,
-        marketplace_id: "EBAY_US",
-        status: "active",
-        sales: item.quantitySold,
-        views: item.watchCount,
-      };
-      const { data: existing } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).maybeSingle();
-      if (existing?.id) await context.supabase.from("ebay_listings").update(row).eq("id", existing.id);
-      else await context.supabase.from("ebay_listings").insert(row);
+    const perPage = data.entriesPerPage ?? 200;
+    let page = 1;
+    let totalSynced = 0;
+    let grandTotal = 0;
+    // eBay caps GetMyeBaySelling at 200 per page; walk until we've covered TotalNumberOfEntries.
+    while (true) {
+      const result = await fetchActiveEbayListings(token, page, perPage);
+      grandTotal = result.total;
+      for (const item of result.items) {
+        const row = {
+          user_id: context.userId,
+          ebay_item_id: item.itemId,
+          sku: item.sku,
+          title: item.title,
+          price: item.price,
+          currency: item.currency,
+          marketplace_id: "EBAY_US",
+          status: "active",
+          sales: item.quantitySold,
+          views: item.watchCount,
+        };
+        const { data: existing } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).maybeSingle();
+        if (existing?.id) await context.supabase.from("ebay_listings").update(row).eq("id", existing.id);
+        else await context.supabase.from("ebay_listings").insert(row);
+      }
+      totalSynced += result.items.length;
+      if (result.items.length < perPage || totalSynced >= grandTotal) break;
+      page += 1;
+      if (page > 50) break; // safety cap ~10k listings
     }
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${result.items.length} active eBay listings`, metadata: { total: result.total } });
-    return result;
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} of ${grandTotal} active eBay listings`, metadata: { total: grandTotal, synced: totalSynced } });
+    return { total: grandTotal, synced: totalSynced };
   });
 
 export const suggestEbayCategories = createServerFn({ method: "POST" })

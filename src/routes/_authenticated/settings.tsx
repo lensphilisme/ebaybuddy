@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { connectEbayWithCode, getEbayConnectUrl } from "@/lib/ebay.functions";
-import { saveCjToken } from "@/lib/cj.functions";
+import { saveCjToken, getIntegrationStatus } from "@/lib/cj.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { KeyRound, Boxes, Tag, ExternalLink } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -20,16 +20,14 @@ function SettingsPage() {
   const urlFn = useServerFn(getEbayConnectUrl);
   const connectFn = useServerFn(connectEbayWithCode);
   const cjSaveFn = useServerFn(saveCjToken);
+  const statusFn = useServerFn(getIntegrationStatus);
 
-  const { data: creds, refetch } = useQuery({
-    queryKey: ["integration-credentials"],
-    queryFn: async () => {
-      const { data } = await supabase.from("integration_credentials").select("provider,is_active,last_validated_at");
-      return data || [];
-    },
+  const { data: status, refetch } = useQuery({
+    queryKey: ["integration-status"],
+    queryFn: () => statusFn(),
   });
-  const ebayCred = creds?.find((c) => c.provider === "ebay");
-  const cjCred = creds?.find((c) => c.provider === "cj");
+  const ebayCred = { is_active: !!status?.ebay.connected, source: status?.ebay.source };
+  const cjCred = { is_active: !!status?.cj.connected, source: status?.cj.source };
 
   const openOAuth = useMutation({
     mutationFn: () => urlFn(),
@@ -54,8 +52,8 @@ function SettingsPage() {
           icon={Boxes}
           title="CJ Dropshipping"
           desc="Personal access token from your CJ developer account — powers product search, freight quotes, categories and warehouses."
-          status={cjCred?.is_active ? "Connected" : "Not connected"}
-          ready={!!cjCred?.is_active}
+          status={cjCred.is_active ? (cjCred.source === "env" ? "Connected (workspace token)" : "Connected") : "Not connected"}
+          ready={cjCred.is_active}
         >
           <div className="space-y-2">
             <div className="flex gap-2">
@@ -75,8 +73,8 @@ function SettingsPage() {
           icon={Tag}
           title="eBay"
           desc="Connect your seller account via OAuth. Push only enabled after you flip the Live switch in Rules."
-          status={ebayCred?.is_active ? "Connected" : "Needs OAuth"}
-          ready={!!ebayCred?.is_active}
+          status={ebayCred.is_active ? (ebayCred.source === "env" ? "Connected (workspace token)" : "Connected") : "Needs OAuth"}
+          ready={ebayCred.is_active}
         >
           <div className="space-y-2">
             <Button variant="outline" onClick={() => openOAuth.mutate()} disabled={openOAuth.isPending}>
