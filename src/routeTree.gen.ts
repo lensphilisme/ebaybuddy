@@ -15,12 +15,12 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as EbayCallbackRouteImport } from './routes/ebay.callback'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as AuthenticatedRulesRouteImport } from './routes/_authenticated/rules'
-import { Route as AuthenticatedProductsRouteImport } from './routes/_authenticated/products'
 import { Route as AuthenticatedOptimizerRouteImport } from './routes/_authenticated/optimizer'
 import { Route as AuthenticatedLogsRouteImport } from './routes/_authenticated/logs'
 import { Route as AuthenticatedListingsRouteImport } from './routes/_authenticated/listings'
 import { Route as AuthenticatedDraftsRouteImport } from './routes/_authenticated/drafts'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
+import { Route as AuthenticatedProductsIndexRouteImport } from './routes/_authenticated/products.index'
 import { Route as AuthenticatedProductsPidRouteImport } from './routes/_authenticated/products.$pid'
 
 const AuthRoute = AuthRouteImport.update({
@@ -52,11 +52,6 @@ const AuthenticatedRulesRoute = AuthenticatedRulesRouteImport.update({
   path: '/rules',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
-const AuthenticatedProductsRoute = AuthenticatedProductsRouteImport.update({
-  id: '/products',
-  path: '/products',
-  getParentRoute: () => AuthenticatedRouteRoute,
-} as any)
 const AuthenticatedOptimizerRoute = AuthenticatedOptimizerRouteImport.update({
   id: '/optimizer',
   path: '/optimizer',
@@ -82,11 +77,17 @@ const AuthenticatedDashboardRoute = AuthenticatedDashboardRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedProductsIndexRoute =
+  AuthenticatedProductsIndexRouteImport.update({
+    id: '/products/',
+    path: '/products/',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedProductsPidRoute =
   AuthenticatedProductsPidRouteImport.update({
-    id: '/$pid',
-    path: '/$pid',
-    getParentRoute: () => AuthenticatedProductsRoute,
+    id: '/products/$pid',
+    path: '/products/$pid',
+    getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
 
 export interface FileRoutesByFullPath {
@@ -97,11 +98,11 @@ export interface FileRoutesByFullPath {
   '/listings': typeof AuthenticatedListingsRoute
   '/logs': typeof AuthenticatedLogsRoute
   '/optimizer': typeof AuthenticatedOptimizerRoute
-  '/products': typeof AuthenticatedProductsRouteWithChildren
   '/rules': typeof AuthenticatedRulesRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/ebay/callback': typeof EbayCallbackRoute
   '/products/$pid': typeof AuthenticatedProductsPidRoute
+  '/products/': typeof AuthenticatedProductsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -111,11 +112,11 @@ export interface FileRoutesByTo {
   '/listings': typeof AuthenticatedListingsRoute
   '/logs': typeof AuthenticatedLogsRoute
   '/optimizer': typeof AuthenticatedOptimizerRoute
-  '/products': typeof AuthenticatedProductsRouteWithChildren
   '/rules': typeof AuthenticatedRulesRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/ebay/callback': typeof EbayCallbackRoute
   '/products/$pid': typeof AuthenticatedProductsPidRoute
+  '/products': typeof AuthenticatedProductsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -127,11 +128,11 @@ export interface FileRoutesById {
   '/_authenticated/listings': typeof AuthenticatedListingsRoute
   '/_authenticated/logs': typeof AuthenticatedLogsRoute
   '/_authenticated/optimizer': typeof AuthenticatedOptimizerRoute
-  '/_authenticated/products': typeof AuthenticatedProductsRouteWithChildren
   '/_authenticated/rules': typeof AuthenticatedRulesRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/ebay/callback': typeof EbayCallbackRoute
   '/_authenticated/products/$pid': typeof AuthenticatedProductsPidRoute
+  '/_authenticated/products/': typeof AuthenticatedProductsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -143,11 +144,11 @@ export interface FileRouteTypes {
     | '/listings'
     | '/logs'
     | '/optimizer'
-    | '/products'
     | '/rules'
     | '/settings'
     | '/ebay/callback'
     | '/products/$pid'
+    | '/products/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -157,11 +158,11 @@ export interface FileRouteTypes {
     | '/listings'
     | '/logs'
     | '/optimizer'
-    | '/products'
     | '/rules'
     | '/settings'
     | '/ebay/callback'
     | '/products/$pid'
+    | '/products'
   id:
     | '__root__'
     | '/'
@@ -172,11 +173,11 @@ export interface FileRouteTypes {
     | '/_authenticated/listings'
     | '/_authenticated/logs'
     | '/_authenticated/optimizer'
-    | '/_authenticated/products'
     | '/_authenticated/rules'
     | '/_authenticated/settings'
     | '/ebay/callback'
     | '/_authenticated/products/$pid'
+    | '/_authenticated/products/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -230,13 +231,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedRulesRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
-    '/_authenticated/products': {
-      id: '/_authenticated/products'
-      path: '/products'
-      fullPath: '/products'
-      preLoaderRoute: typeof AuthenticatedProductsRouteImport
-      parentRoute: typeof AuthenticatedRouteRoute
-    }
     '/_authenticated/optimizer': {
       id: '/_authenticated/optimizer'
       path: '/optimizer'
@@ -272,28 +266,22 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedDashboardRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/products/': {
+      id: '/_authenticated/products/'
+      path: '/products'
+      fullPath: '/products/'
+      preLoaderRoute: typeof AuthenticatedProductsIndexRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/products/$pid': {
       id: '/_authenticated/products/$pid'
-      path: '/$pid'
+      path: '/products/$pid'
       fullPath: '/products/$pid'
       preLoaderRoute: typeof AuthenticatedProductsPidRouteImport
-      parentRoute: typeof AuthenticatedProductsRoute
+      parentRoute: typeof AuthenticatedRouteRoute
     }
   }
 }
-
-interface AuthenticatedProductsRouteChildren {
-  AuthenticatedProductsPidRoute: typeof AuthenticatedProductsPidRoute
-}
-
-const AuthenticatedProductsRouteChildren: AuthenticatedProductsRouteChildren = {
-  AuthenticatedProductsPidRoute: AuthenticatedProductsPidRoute,
-}
-
-const AuthenticatedProductsRouteWithChildren =
-  AuthenticatedProductsRoute._addFileChildren(
-    AuthenticatedProductsRouteChildren,
-  )
 
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
@@ -301,9 +289,10 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedListingsRoute: typeof AuthenticatedListingsRoute
   AuthenticatedLogsRoute: typeof AuthenticatedLogsRoute
   AuthenticatedOptimizerRoute: typeof AuthenticatedOptimizerRoute
-  AuthenticatedProductsRoute: typeof AuthenticatedProductsRouteWithChildren
   AuthenticatedRulesRoute: typeof AuthenticatedRulesRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
+  AuthenticatedProductsPidRoute: typeof AuthenticatedProductsPidRoute
+  AuthenticatedProductsIndexRoute: typeof AuthenticatedProductsIndexRoute
 }
 
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
@@ -312,9 +301,10 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedListingsRoute: AuthenticatedListingsRoute,
   AuthenticatedLogsRoute: AuthenticatedLogsRoute,
   AuthenticatedOptimizerRoute: AuthenticatedOptimizerRoute,
-  AuthenticatedProductsRoute: AuthenticatedProductsRouteWithChildren,
   AuthenticatedRulesRoute: AuthenticatedRulesRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
+  AuthenticatedProductsPidRoute: AuthenticatedProductsPidRoute,
+  AuthenticatedProductsIndexRoute: AuthenticatedProductsIndexRoute,
 }
 
 const AuthenticatedRouteRouteWithChildren =

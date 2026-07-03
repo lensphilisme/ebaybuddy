@@ -14,7 +14,7 @@ import { Search, Loader2, ChevronLeft, ChevronRight, FileEdit } from "lucide-rea
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/products")({
+export const Route = createFileRoute("/_authenticated/products/")({
   component: ProductsPage,
 });
 
