@@ -52,8 +52,8 @@ function SettingsPage() {
           icon={Boxes}
           title="CJ Dropshipping"
           desc="Personal access token from your CJ developer account — powers product search, freight quotes, categories and warehouses."
-          status={cjCred?.is_active ? "Connected" : "Not connected"}
-          ready={!!cjCred?.is_active}
+          status={cjCred.is_active ? (cjCred.source === "env" ? "Connected (workspace token)" : "Connected") : "Not connected"}
+          ready={cjCred.is_active}
         >
           <div className="space-y-2">
             <div className="flex gap-2">
