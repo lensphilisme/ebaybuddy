@@ -73,8 +73,8 @@ function SettingsPage() {
           icon={Tag}
           title="eBay"
           desc="Connect your seller account via OAuth. Push only enabled after you flip the Live switch in Rules."
-          status={ebayCred?.is_active ? "Connected" : "Needs OAuth"}
-          ready={!!ebayCred?.is_active}
+          status={ebayCred.is_active ? (ebayCred.source === "env" ? "Connected (workspace token)" : "Connected") : "Needs OAuth"}
+          ready={ebayCred.is_active}
         >
           <div className="space-y-2">
             <Button variant="outline" onClick={() => openOAuth.mutate()} disabled={openOAuth.isPending}>
