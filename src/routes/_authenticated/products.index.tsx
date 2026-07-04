@@ -85,8 +85,10 @@ function ProductsPage() {
         // Conservative shipping estimate of 20% of item cost when no freight quote yet
         const shipping = itemCost * 0.2;
         const landed = itemCost + shipping;
-        const withMarkup = landed * (1 + markupPct / 100);
-        const finalSell = withMarkup / (1 - feePct);
+        const profit = landed * (markupPct / 100);
+        const preFeePrice = landed + profit;
+        const ebayFee = preFeePrice * feePct;
+        const finalSell = preFeePrice + ebayFee;
         return {
           user_id: auth.user!.id,
           cj_product_id: p.pid,
@@ -100,6 +102,8 @@ function ProductsPage() {
             shipping_estimate: Number(shipping.toFixed(2)),
             markup_pct: markupPct,
             ebay_fee_pct: feePct,
+            ebay_fee: Number(ebayFee.toFixed(2)),
+            profit: Number(profit.toFixed(2)),
             note: "Estimated; refine on product detail with live freight quote.",
           },
         };

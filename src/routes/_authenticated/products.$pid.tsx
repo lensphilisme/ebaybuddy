@@ -30,6 +30,40 @@ const COUNTRIES = [
 
 const EBAY_FEE_PCT = 0.17;
 
+function cleanImageList(...inputs: unknown[]) {
+  const urls: string[] = [];
+  const visit = (value: unknown) => {
+    if (!value) return;
+    if (Array.isArray(value)) return value.forEach(visit);
+    if (typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try { visit(JSON.parse(trimmed)); return; } catch { /* use as raw below */ }
+    }
+    try {
+      const u = new URL(trimmed.replace(/^['"]|['"]$/g, ""));
+      if (u.protocol === "https:" || u.protocol === "http:") urls.push(u.toString());
+    } catch { /* ignore */ }
+  };
+  inputs.forEach(visit);
+  return Array.from(new Set(urls));
+}
+
+function variantAxes(productKey?: string, firstVariant?: any) {
+  const keyAxes = String(productKey || "").split(/[-,/|>]+/).map((p) => p.trim()).filter(Boolean);
+  if (keyAxes.length) return keyAxes;
+  const parts = String(firstVariant?.variantKey || firstVariant?.variantNameEn || "").split(/[-,/|]+/).filter(Boolean);
+  return parts.length > 1 ? parts.map((_, i) => `Option ${i + 1}`) : ["Option"];
+}
+
+function variantOptionMap(variant: any, axes: string[]) {
+  const label = String(variant?.variantKey || variant?.variantNameEn || variant?.variantSku || variant?.vid || "Option").trim();
+  const parts = label.split(/[-,/|]+/).map((p) => p.trim()).filter(Boolean);
+  const values = parts.length === axes.length ? parts : axes.length === 1 ? [label] : axes.map((_, i) => parts[i] || label);
+  return Object.fromEntries(axes.map((axis, i) => [axis, values[i] || label]));
+}
+
 function ProductDetailPage() {
   const { pid } = Route.useParams();
   const productFn = useServerFn(getCjProduct);
@@ -55,7 +89,7 @@ function ProductDetailPage() {
     (Array.isArray(p.productImageSet) ? p.productImageSet : []).forEach((u) => u && all.add(u));
     (Array.isArray(p.productImages) ? p.productImages : []).forEach((u) => u && all.add(u));
     variants.forEach((v) => v.variantImage && all.add(v.variantImage));
-    return Array.from(all);
+    return cleanImageList(Array.from(all));
   }, [p, variants]);
 
   const [country, setCountry] = useState("US");
@@ -79,18 +113,36 @@ function ProductDetailPage() {
   const shipping = carrier?.logisticPrice ?? 0;
 
   const landed = itemCost + shipping;
-  const withMarkup = landed * (1 + markupPct / 100);
-  // Solve for sell price S so that (S - S*fee) >= landed + desired profit; we treat markup as gross sell uplift on landed,
-  // then add fee buffer: finalSell = (landed + markup) / (1 - fee)
-  const finalSell = withMarkup / (1 - EBAY_FEE_PCT);
-  const ebayFee = finalSell * EBAY_FEE_PCT;
-  const profit = finalSell - ebayFee - landed;
+  const desiredProfit = landed * (markupPct / 100);
+  const preFeePrice = landed + desiredProfit;
+  const ebayFee = preFeePrice * EBAY_FEE_PCT;
+  const finalSell = preFeePrice + ebayFee;
+  const profit = desiredProfit;
+  const axes = useMemo(() => variantAxes(p?.productKeyEn, variants[0]), [p?.productKeyEn, variants]);
+  const selectedOptions = activeVariant ? variantOptionMap(activeVariant, axes) : {};
+  const priceForVariant = (rawCost: unknown) => {
+    const variantCost = Number(rawCost ?? itemCost) || itemCost;
+    const variantLanded = variantCost + shipping;
+    const variantProfit = variantLanded * (markupPct / 100);
+    const variantPreFee = variantLanded + variantProfit;
+    return Number((variantPreFee + variantPreFee * EBAY_FEE_PCT).toFixed(2));
+  };
 
   const sendToDraft = useMutation({
     mutationFn: async () => {
       if (!p) throw new Error("Loading…");
       const { data: auth } = await supabase.auth.getUser();
       if (!auth.user) throw new Error("Not signed in");
+      const allVariantRows = variants.map((v) => ({
+        vid: v.vid,
+        variantSku: v.variantSku || v.vid,
+        variantKey: v.variantKey || v.variantNameEn || v.variantSku || v.vid,
+        variantNameEn: v.variantNameEn,
+        variantImage: cleanImageList(v.variantImage)[0] || images[0] || null,
+        variantSellPrice: Number(v.variantSellPrice ?? p.sellPrice ?? 0),
+        price: priceForVariant(v.variantSellPrice),
+        inventory: Number(v.inventory || 1),
+      }));
       const { error } = await supabase.from("listing_drafts").upsert({
         user_id: auth.user.id,
         cj_product_id: p.pid,
@@ -98,8 +150,9 @@ function ProductDetailPage() {
         sku: activeVariant?.variantSku || p.productSku || p.pid,
         title: (p.productNameEn || "").slice(0, 80),
         price: Number(finalSell.toFixed(2)),
-        images: images.slice(0, 12),
+        images: cleanImageList(activeVariant?.variantImage, images).slice(0, 12),
         description: p.description ?? "",
+        item_specifics: { Brand: "Unbranded", Condition: "New", ...selectedOptions },
         status: "pending" as const,
         profit: {
           item_cost: itemCost,
@@ -108,9 +161,14 @@ function ProductDetailPage() {
           carrier_days: carrier?.logisticAging ?? null,
           ebay_fee_pct: EBAY_FEE_PCT,
           ebay_fee: Number(ebayFee.toFixed(2)),
+          desired_profit: Number(desiredProfit.toFixed(2)),
           markup_pct: markupPct,
           profit: Number(profit.toFixed(2)),
           end_country: country,
+          start_country: "CN",
+          product_key: p.productKeyEn || null,
+          variant_axes: axes,
+          variant_group: allVariantRows.length > 1 ? { variants: allVariantRows } : null,
         },
       }, { onConflict: "user_id,cj_product_id" });
       if (error) throw error;
@@ -133,10 +191,10 @@ function ProductDetailPage() {
       ) : error ? (
         <Card className="p-6 border-destructive/40 bg-destructive/5 text-sm text-destructive">{(error as Error).message}</Card>
       ) : !p ? null : (
-        <div className="grid lg:grid-cols-2 gap-6">
+        <div className="grid lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] gap-6 max-w-full overflow-hidden">
           {/* Image carousel */}
-          <div>
-            <Carousel className="w-full">
+          <div className="min-w-0 max-w-full overflow-hidden">
+            <Carousel className="w-full max-w-full overflow-hidden">
               <CarouselContent>
                 {images.length === 0 ? (
                   <CarouselItem><div className="aspect-square bg-muted rounded-lg" /></CarouselItem>
@@ -148,9 +206,9 @@ function ProductDetailPage() {
                   </CarouselItem>
                 ))}
               </CarouselContent>
-              {images.length > 1 && (<><CarouselPrevious /><CarouselNext /></>)}
+              {images.length > 1 && (<><CarouselPrevious className="left-2" /><CarouselNext className="right-2" /></>)}
             </Carousel>
-            <div className="mt-3 grid grid-cols-6 gap-2">
+            <div className="mt-3 grid grid-cols-6 gap-2 max-w-full">
               {images.slice(0, 12).map((src, i) => (
                 <div key={`${src}-thumb-${i}`} className="aspect-square bg-muted rounded overflow-hidden">
                   <img src={src} alt="" className="w-full h-full object-cover" loading="lazy" />
@@ -160,9 +218,9 @@ function ProductDetailPage() {
           </div>
 
           {/* Details + pricing */}
-          <div className="space-y-5">
+          <div className="space-y-5 min-w-0 max-w-full overflow-hidden">
             <div>
-              <h2 className="text-xl font-semibold leading-snug">{p.productNameEn}</h2>
+              <h2 className="text-xl font-semibold leading-snug break-words">{p.productNameEn}</h2>
               <div className="mt-2 flex flex-wrap gap-2 text-xs">
                 <Badge variant="secondary">SKU: {p.productSku}</Badge>
                 {p.categoryName && <Badge variant="secondary">{p.categoryName}</Badge>}
@@ -175,7 +233,7 @@ function ProductDetailPage() {
               <div>
                 <Label className="text-xs uppercase tracking-wide text-muted-foreground">Variant</Label>
                 <Select value={activeVid} onValueChange={setVariantId}>
-                  <SelectTrigger className="mt-1"><SelectValue placeholder="Select variant" /></SelectTrigger>
+                  <SelectTrigger className="mt-1 max-w-full"><SelectValue placeholder="Select variant" /></SelectTrigger>
                   <SelectContent>
                     {variants.map((v) => (
                       <SelectItem key={v.vid} value={v.vid}>
@@ -184,12 +242,17 @@ function ProductDetailPage() {
                     ))}
                   </SelectContent>
                 </Select>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {Object.entries(selectedOptions).map(([axis, value]) => (
+                    <Badge key={axis} variant="secondary" className="max-w-full whitespace-normal break-words">{axis}: {String(value)}</Badge>
+                  ))}
+                </div>
               </div>
             )}
 
             <Card className="p-4 space-y-3">
               <div className="flex items-center gap-2 text-sm font-medium"><Truck className="h-4 w-4" /> CJ Freight</div>
-              <div className="grid grid-cols-[1fr_auto] gap-2 items-end">
+              <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 items-end">
                 <div>
                   <Label className="text-xs text-muted-foreground">Ship to</Label>
                   <Select value={country} onValueChange={setCountry}>
@@ -234,7 +297,8 @@ function ProductDetailPage() {
                 <dt className="text-muted-foreground">Item cost</dt><dd className="text-right">${itemCost.toFixed(2)}</dd>
                 <dt className="text-muted-foreground">+ Shipping ({carrier?.logisticName ?? "—"})</dt><dd className="text-right">${shipping.toFixed(2)}</dd>
                 <dt className="font-medium">Landed cost</dt><dd className="text-right font-medium">${landed.toFixed(2)}</dd>
-                <dt className="text-muted-foreground">eBay fee ({Math.round(EBAY_FEE_PCT * 100)}%)</dt><dd className="text-right">${ebayFee.toFixed(2)}</dd>
+                  <dt className="text-muted-foreground">Profit before fee</dt><dd className="text-right">${desiredProfit.toFixed(2)}</dd>
+                  <dt className="text-muted-foreground">eBay fee ({Math.round(EBAY_FEE_PCT * 100)}% of ${preFeePrice.toFixed(2)})</dt><dd className="text-right">${ebayFee.toFixed(2)}</dd>
                 <dt className="font-semibold">eBay sell price</dt><dd className="text-right font-semibold text-primary">${finalSell.toFixed(2)}</dd>
                 <dt className="font-semibold">Profit</dt><dd className={`text-right font-semibold ${profit >= 0 ? "text-success" : "text-destructive"}`}>${profit.toFixed(2)}</dd>
               </dl>
@@ -246,7 +310,7 @@ function ProductDetailPage() {
             {p.description && (
               <Card className="p-4">
                 <div className="text-sm font-medium mb-2">Description</div>
-                <div className="prose prose-sm max-w-none text-sm" dangerouslySetInnerHTML={{ __html: p.description }} />
+                <div className="prose prose-sm max-w-none text-sm overflow-hidden break-words [&_*]:max-w-full [&_img]:h-auto [&_table]:w-full" dangerouslySetInnerHTML={{ __html: p.description }} />
               </Card>
             )}
           </div>
