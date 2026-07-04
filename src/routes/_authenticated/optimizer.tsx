@@ -39,7 +39,7 @@ function OptimizerPage() {
 
   return (
     <AppShell title="Optimizer" subtitle="AI-driven rules that end dead listings and rewrite low-CTR titles">
-      <div className="grid md:grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-3 gap-3 mb-5">
         <Card className="p-4">
           <div className="text-xs text-muted-foreground">Active listings</div>
           <div className="text-2xl font-semibold">{listings.filter((l: any) => l.status === "active").length}</div>
@@ -67,7 +67,7 @@ function OptimizerPage() {
         {actions.length === 0 ? (
           <div className="p-10 text-center text-sm text-muted-foreground">
             <LineChart className="h-8 w-8 mx-auto mb-2 opacity-60" />
-            No actions yet. Click <strong>Preview AI actions</strong> to see what the optimizer would do based on your Rules.
+            No actions yet. Click <strong>Preview AI actions</strong> to scan active listings for bad titles, low exposure, no views, no clicks and no sales.
           </div>
         ) : (
           <Table>
@@ -76,8 +76,8 @@ function OptimizerPage() {
               {actions.map((a, i) => (
                 <TableRow key={a.id + i}>
                   <TableCell className="max-w-md line-clamp-2">{a.title}</TableCell>
-                  <TableCell><Badge variant={a.action === "end_recommended" ? "destructive" : "secondary"}>{a.action}</Badge></TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{a.detail}</TableCell>
+                  <TableCell><Badge variant={a.action.includes("end") ? "destructive" : "secondary"}>{a.action}</Badge></TableCell>
+                  <TableCell className="text-xs text-muted-foreground break-words">{a.detail}{a.error && <div className="text-destructive mt-1">{a.error}</div>}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

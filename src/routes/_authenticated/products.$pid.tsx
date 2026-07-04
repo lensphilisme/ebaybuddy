@@ -120,6 +120,13 @@ function ProductDetailPage() {
   const profit = desiredProfit;
   const axes = useMemo(() => variantAxes(p?.productKeyEn, variants[0]), [p?.productKeyEn, variants]);
   const selectedOptions = activeVariant ? variantOptionMap(activeVariant, axes) : {};
+  const priceForVariant = (rawCost: unknown) => {
+    const variantCost = Number(rawCost ?? itemCost) || itemCost;
+    const variantLanded = variantCost + shipping;
+    const variantProfit = variantLanded * (markupPct / 100);
+    const variantPreFee = variantLanded + variantProfit;
+    return Number((variantPreFee + variantPreFee * EBAY_FEE_PCT).toFixed(2));
+  };
 
   const sendToDraft = useMutation({
     mutationFn: async () => {
@@ -133,6 +140,7 @@ function ProductDetailPage() {
         variantNameEn: v.variantNameEn,
         variantImage: cleanImageList(v.variantImage)[0] || images[0] || null,
         variantSellPrice: Number(v.variantSellPrice ?? p.sellPrice ?? 0),
+        price: priceForVariant(v.variantSellPrice),
         inventory: Number(v.inventory || 1),
       }));
       const { error } = await supabase.from("listing_drafts").upsert({
