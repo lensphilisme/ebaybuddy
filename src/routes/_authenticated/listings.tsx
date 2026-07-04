@@ -18,17 +18,18 @@ function ListingsPage() {
     const { data, error } = await supabase.from("ebay_listings").select("*").order("listed_at", { ascending: false });
     if (error) throw error; return data || [];
   }});
+  const rows = Array.from(new Map(data.map((l: any) => [l.ebay_item_id || l.id, l])).values());
   const sync = useMutation({ mutationFn: () => syncFn({ data: { entriesPerPage: 200 } }), onSuccess: (r: any) => { toast.success(`Synced ${r.synced || 0} of ${r.total || 0} active listings`); refetch(); }, onError: (e: Error) => toast.error(e.message) });
   return <AppShell title="Active listings" subtitle="Your live eBay listings, synced from your connected account">
-    <div className="mb-4 flex items-center justify-between flex-wrap gap-3"><Button onClick={() => sync.mutate()} disabled={sync.isPending}><DownloadCloud className="h-4 w-4 mr-1" />{sync.isPending ? "Syncing…" : "Sync all from eBay"}</Button><div className="text-sm text-muted-foreground">{data.length} listing{data.length === 1 ? "" : "s"} stored</div></div>
+    <div className="mb-4 flex items-center justify-between flex-wrap gap-3"><Button onClick={() => sync.mutate()} disabled={sync.isPending}><DownloadCloud className="h-4 w-4 mr-1" />{sync.isPending ? "Syncing…" : "Sync all from eBay"}</Button><div className="text-sm text-muted-foreground">{rows.length} listing{rows.length === 1 ? "" : "s"} stored</div></div>
     <Card className="overflow-hidden">
-      {isLoading ? <div className="p-10"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : data.length === 0 ? (
+      {isLoading ? <div className="p-10"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : rows.length === 0 ? (
         <div className="p-12 text-center text-sm text-muted-foreground">No synced listings yet. Click <strong>Sync from eBay</strong> to pull your active inventory.</div>
       ) : (
         <div className="overflow-x-auto">
           <Table>
             <TableHeader><TableRow><TableHead className="w-16" /><TableHead>Item</TableHead><TableHead className="hidden sm:table-cell">SKU</TableHead><TableHead>Price</TableHead><TableHead className="hidden md:table-cell">Sales</TableHead><TableHead className="hidden md:table-cell">Watch</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-            <TableBody>{data.map((l: any) => {
+            <TableBody>{rows.map((l: any) => {
               const img = Array.isArray(l.images) ? l.images[0] : l.image_url || l.thumbnail_url;
               return (
                 <TableRow key={l.id}>

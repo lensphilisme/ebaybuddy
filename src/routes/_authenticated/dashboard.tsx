@@ -52,15 +52,15 @@ function DashboardPage() {
 
   return (
     <AppShell title="Dashboard" subtitle="Overview of your CJ → eBay pipeline">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((s) => (
           <Card key={s.label} className="shadow-[var(--shadow-card)]">
-            <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{s.label}</CardTitle>
+            <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0 p-3 sm:p-4">
+              <CardTitle className="text-xs sm:text-sm font-medium text-muted-foreground">{s.label}</CardTitle>
               <s.Icon className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold tracking-tight">{s.v}</div>
+            <CardContent className="p-3 pt-0 sm:p-4 sm:pt-0">
+              <div className="text-2xl sm:text-3xl font-bold tracking-tight">{s.v}</div>
               <div className="text-xs text-muted-foreground mt-1">{s.hint}</div>
             </CardContent>
           </Card>

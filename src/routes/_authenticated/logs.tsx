@@ -19,7 +19,7 @@ function LogsPage() {
     queryFn: async () => {
       let q = supabase.from("activity_logs").select("*").order("created_at", { ascending: false }).limit(200);
       if (category !== "all") q = q.eq("category", category);
-      if (level !== "all") q = q.eq("level", level);
+      if (level !== "all") q = q.eq("level", level as "success" | "info" | "warn" | "error");
       const { data, error } = await q;
       if (error) throw error;
       return data || [];
