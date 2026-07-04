@@ -1,6 +1,21 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { ebayConsentUrl, exchangeEbayCode, fetchActiveEbayListings, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem } from "./ebay.server";
+import { ebayConsentUrl, exchangeEbayCode, fetchActiveEbayListings, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
+
+function cleanTitle(value: unknown) {
+  return String(value ?? "")
+    .replace(/\bban\s+the\s+sale\s+of\s+amazon\b/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;:])/g, "$1")
+    .trim()
+    .slice(0, 80);
+}
+
+function fallbackRewrite(title: string) {
+  const cleaned = cleanTitle(title);
+  const parts = cleaned.split(/[|,]/).map((p) => p.trim()).filter(Boolean);
+  return (parts[0] || cleaned || title).slice(0, 80);
+}
 
 export const getEbayConnectUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -51,9 +66,15 @@ export const syncEbayListings = createServerFn({ method: "POST" })
           status: "active",
           sales: item.quantitySold,
           views: item.watchCount,
+          listed_at: item.listedAt || undefined,
         };
-        const { data: existing } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).maybeSingle();
-        if (existing?.id) await context.supabase.from("ebay_listings").update(row).eq("id", existing.id);
+        const { data: existingRows } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).limit(10);
+        const existing = existingRows?.[0];
+        if (existing?.id) {
+          await context.supabase.from("ebay_listings").update(row).eq("id", existing.id);
+          const duplicateIds = (existingRows || []).slice(1).map((r: any) => r.id);
+          if (duplicateIds.length) await context.supabase.from("ebay_listings").delete().in("id", duplicateIds);
+        }
         else await context.supabase.from("ebay_listings").insert(row);
       }
       totalSynced += result.items.length;
@@ -87,10 +108,13 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
         const pushed = await publishInventoryItem(token, draft);
         await context.supabase.from("listing_drafts").update({ status: "pushed", ebay_listing_id: null }).eq("id", draft.id);
         await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: draft.sku, title: draft.title, price: draft.price, cj_product_id: draft.cj_product_id, cj_landed_cost: Number((draft.profit || {}).item_cost || 0) + Number((draft.profit || {}).shipping || 0) });
+        await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Pushed draft to eBay: ${draft.title}`, metadata: { draftId: draft.id, listingId: pushed.listingId, offerId: pushed.offerId } });
         results.push({ draftId: draft.id, ok: true, ...pushed });
       } catch (e) {
-        await context.supabase.from("listing_drafts").update({ status: "failed", audit_reason: e instanceof Error ? e.message : String(e) }).eq("id", draft.id);
-        results.push({ draftId: draft.id, ok: false, error: e instanceof Error ? e.message : String(e) });
+        const message = e instanceof Error ? e.message : String(e);
+        await context.supabase.from("listing_drafts").update({ status: "failed", audit_reason: message }).eq("id", draft.id);
+        await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "error", category: "ebay", message: `eBay push failed: ${draft.title}`, metadata: { draftId: draft.id, error: message } });
+        results.push({ draftId: draft.id, ok: false, error: message });
       }
     }
     return results;
@@ -142,24 +166,36 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { dryRun?: boolean; listingIds?: string[] }) => data)
   .handler(async ({ data, context }: any) => {
+    const token = data.dryRun ? null : await getFreshEbayToken(context.supabase, context.userId).catch(() => null);
     const { data: rule } = await context.supabase.from("automation_rules").select("*").eq("user_id", context.userId).maybeSingle();
     const daysNoSales = Number(rule?.optimizer_no_sales_days ?? 30);
     const daysNoViewsRewrite = Number(rule?.optimizer_low_views_days ?? 14);
+    const poorExposureDays = Number(rule?.optimizer_poor_exposure_days ?? 45);
     let q = context.supabase.from("ebay_listings").select("*").eq("user_id", context.userId).eq("status", "active");
     if (data.listingIds?.length) q = q.in("id", data.listingIds);
     const { data: listings, error } = await q;
     if (error) throw error;
-    const actions: { id: string; title: string; action: string; detail?: string }[] = [];
+    const actions: { id: string; title: string; action: string; detail?: string; error?: string }[] = [];
     for (const l of listings || []) {
       const listedAt = l.listed_at ? new Date(l.listed_at) : null;
       const ageDays = listedAt ? Math.floor((Date.now() - listedAt.getTime()) / 86400000) : 0;
       if (ageDays >= daysNoSales && (l.sales || 0) === 0) {
-        actions.push({ id: l.id, title: l.title, action: "end_recommended", detail: `${ageDays}d no sales` });
-        if (!data.dryRun) await context.supabase.from("ebay_listings").update({ status: "flagged_end" }).eq("id", l.id);
+        const action = { id: l.id, title: l.title, action: data.dryRun ? "end_recommended" : "ended", detail: `${ageDays}d no sales` };
+        actions.push(action);
+        if (!data.dryRun) {
+          try {
+            if (token && l.ebay_item_id) await endEbayFixedPriceListing(token, l.ebay_item_id, "NotAvailable");
+            await context.supabase.from("ebay_listings").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", l.id);
+          } catch (e) {
+            action.error = e instanceof Error ? e.message : String(e);
+            await context.supabase.from("ebay_listings").update({ status: "error" }).eq("id", l.id);
+          }
+        }
         continue;
       }
-      if (ageDays >= daysNoViewsRewrite && (l.views || 0) < 5) {
-        let newTitle = l.title;
+      const needsRewrite = /ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "") || (l.views || 0) === 0 || (ageDays >= daysNoViewsRewrite && (l.views || 0) < 5) || (ageDays >= poorExposureDays && (l.clicks || 0) === 0);
+      if (needsRewrite) {
+        let newTitle = fallbackRewrite(l.title);
         if (process.env.LOVABLE_API_KEY) {
           try {
             const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -174,11 +210,20 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
               }),
             });
             const j = await res.json();
-            newTitle = String(j.choices?.[0]?.message?.content || l.title).replace(/^"|"$/g, "").slice(0, 80);
+            newTitle = cleanTitle(j.choices?.[0]?.message?.content || newTitle);
           } catch {}
         }
-        actions.push({ id: l.id, title: l.title, action: "rewrite_title", detail: newTitle });
-        if (!data.dryRun && newTitle !== l.title) await context.supabase.from("ebay_listings").update({ title: newTitle }).eq("id", l.id);
+        const reason = /ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "") ? "removed prohibited marketplace text" : `${ageDays}d, ${l.views || 0} views, ${l.clicks || 0} clicks, ${l.sales || 0} sales`;
+        const action = { id: l.id, title: l.title, action: "rewrite_title", detail: `${newTitle} · ${reason}` };
+        actions.push(action);
+        if (!data.dryRun && newTitle && newTitle !== l.title) {
+          try {
+            if (token && l.ebay_item_id) await reviseEbayListingText(token, l.ebay_item_id, newTitle);
+            await context.supabase.from("ebay_listings").update({ title: newTitle }).eq("id", l.id);
+          } catch (e) {
+            action.error = e instanceof Error ? e.message : String(e);
+          }
+        }
       }
     }
     await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "info", category: "optimizer", message: `Optimizer ${data.dryRun ? "dry-run" : "run"}: ${actions.length} action(s)`, metadata: { actions } });
