@@ -180,7 +180,7 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
       const listedAt = l.listed_at ? new Date(l.listed_at) : null;
       const ageDays = listedAt ? Math.floor((Date.now() - listedAt.getTime()) / 86400000) : 0;
       if (ageDays >= daysNoSales && (l.sales || 0) === 0) {
-        const action = { id: l.id, title: l.title, action: data.dryRun ? "end_recommended" : "ended", detail: `${ageDays}d no sales` };
+        const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: l.id, title: l.title, action: data.dryRun ? "end_recommended" : "ended", detail: `${ageDays}d no sales` };
         actions.push(action);
         if (!data.dryRun) {
           try {
@@ -214,7 +214,7 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
           } catch {}
         }
         const reason = /ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "") ? "removed prohibited marketplace text" : `${ageDays}d, ${l.views || 0} views, ${l.clicks || 0} clicks, ${l.sales || 0} sales`;
-        const action = { id: l.id, title: l.title, action: "rewrite_title", detail: `${newTitle} · ${reason}` };
+        const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: l.id, title: l.title, action: "rewrite_title", detail: `${newTitle} · ${reason}` };
         actions.push(action);
         if (!data.dryRun && newTitle && newTitle !== l.title) {
           try {
