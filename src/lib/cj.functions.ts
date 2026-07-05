@@ -69,9 +69,9 @@ export const getIntegrationStatus = createServerFn({ method: "GET" })
     const cjRow = data?.find((r: any) => r.provider === "cj");
     const ebayRow = data?.find((r: any) => r.provider === "ebay");
     const cjConnected = !!(cjRow?.is_active && cjRow.credentials?.access_token) || !!process.env.CJ_ACCESS_TOKEN;
-    const ebayConnected = !!(ebayRow?.is_active && ebayRow.credentials?.refresh_token) || !!process.env.EBAY_USER_REFRESH_TOKEN;
+    const ebayConnected = !!(ebayRow?.is_active && ebayRow.credentials?.refresh_token);
     return {
       cj: { connected: cjConnected, source: cjRow?.credentials?.access_token ? "user" : cjConnected ? "env" : null, last: cjRow?.last_validated_at || null },
-      ebay: { connected: ebayConnected, source: ebayRow?.credentials?.refresh_token ? "user" : ebayConnected ? "env" : null, last: ebayRow?.last_validated_at || null },
+      ebay: { connected: ebayConnected, source: ebayConnected ? "user" : null, last: ebayRow?.last_validated_at || null },
     };
   });

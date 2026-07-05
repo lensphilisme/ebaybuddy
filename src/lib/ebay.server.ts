@@ -79,8 +79,7 @@ export async function getUserEbayCredential(supabase: any, userId: string): Prom
     .eq("label", "default")
     .maybeSingle();
   const creds = (data?.credentials || {}) as EbayCredential;
-  if (!creds.refresh_token && process.env.EBAY_USER_REFRESH_TOKEN) creds.refresh_token = process.env.EBAY_USER_REFRESH_TOKEN;
-  if (!creds.refresh_token) throw new Error("Connect your eBay account in Settings first.");
+  if (!creds.refresh_token) throw new Error("Connect your eBay seller account in Settings first.");
   return creds;
 }
 
