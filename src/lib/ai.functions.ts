@@ -118,14 +118,14 @@ export const optimizeDraftWithAi = createServerFn({ method: "POST" })
         out = fallback(draft.title, draft.description);
       }
     }
-    const specifics = { Condition: "New", Brand: out.brand || draft.brand || "Unbranded", ...(out.item_specifics || {}), Model: out.model || draft.model || "Does not apply" };
+    const specifics = sanitizeSpecifics({ Brand: out.brand || draft.brand || "Unbranded", ...(out.item_specifics || {}), Model: out.model || draft.model || "Does not apply" });
     const update = {
       title: cleanText(out.title, draft.title).slice(0, 80),
       description: cleanText(out.description, fallback(draft.title, draft.description).description),
-      bullet_features: Array.isArray(out.bullet_features) ? out.bullet_features.map((b: unknown) => cleanText(b)).filter(Boolean).slice(0, 8) : [],
+      bullet_features: Array.isArray(out.bullet_features) ? out.bullet_features.map((b: unknown) => shortAspect("Features", b)).filter(Boolean).slice(0, 8) : [],
       item_specifics: specifics,
-      brand: out.brand || "Unbranded",
-      model: out.model || "Does not apply",
+      brand: specifics.Brand,
+      model: specifics.Model,
     };
     await context.supabase.from("listing_drafts").update(update).eq("id", draft.id);
     await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `Optimized draft: ${update.title}`, metadata: { draftId: draft.id } });
