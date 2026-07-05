@@ -79,8 +79,7 @@ export async function getUserEbayCredential(supabase: any, userId: string): Prom
     .eq("label", "default")
     .maybeSingle();
   const creds = (data?.credentials || {}) as EbayCredential;
-  if (!creds.refresh_token && process.env.EBAY_USER_REFRESH_TOKEN) creds.refresh_token = process.env.EBAY_USER_REFRESH_TOKEN;
-  if (!creds.refresh_token) throw new Error("Connect your eBay account in Settings first.");
+  if (!creds.refresh_token) throw new Error("Connect your eBay seller account in Settings first.");
   return creds;
 }
 
@@ -201,10 +200,20 @@ async function extractOfferIdFromError(offerJson: any): Promise<string | null> {
 }
 
 function cleanText(value: unknown, fallback = "") {
-  return String(value ?? fallback)
+  const normalize = (v: unknown) => String(v ?? "")
     .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
     .replace(/\s+/g, " ")
     .trim();
+  return normalize(value) || normalize(fallback);
+}
+
+function safeDescription(draft: any) {
+  const bulletText = Array.isArray(draft.bullet_features) ? draft.bullet_features.join(". ") : "";
+  const title = safeTitle(draft.title, draft.sku);
+  return cleanText(draft.description, `${title}. ${bulletText}. New item. Review photos and selected option before checkout.`) || title;
 }
 
 function safeTitle(value: unknown, fallback: unknown) {
@@ -219,11 +228,13 @@ function flattenImageInput(input: unknown): unknown[] {
   if (!input) return [];
   if (Array.isArray(input)) return input.flatMap(flattenImageInput);
   if (typeof input === "string") {
-    const trimmed = input.trim();
+    const trimmed = input.trim().replace(/\\\//g, "/").replace(/&amp;/gi, "&");
     if (!trimmed) return [];
     if ((trimmed.startsWith("[") && trimmed.endsWith("]")) || (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
       try { return flattenImageInput(JSON.parse(trimmed)); } catch { /* keep as URL below */ }
     }
+    const urls = trimmed.match(/https?:\/\/[^\s"'\\\])>,]+/gi);
+    if (urls?.length) return urls;
     return [trimmed];
   }
   return [];
@@ -233,8 +244,8 @@ function normalizeImageUrls(...inputs: unknown[]) {
   const urls: string[] = [];
   for (const input of inputs) {
     for (const raw of flattenImageInput(input)) {
-      const value = String(raw || "").trim().replace(/^['"]|['"]$/g, "");
-      if (!value || value.startsWith("[") || value.includes('"')) continue;
+      const value = String(raw || "").trim().replace(/\\\//g, "/").replace(/&amp;/gi, "&").replace(/^['"]|['"]$/g, "");
+      if (!value || !/^https?:\/\//i.test(value)) continue;
       try {
         const parsed = new URL(value);
         if ((parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.hostname.includes(".")) urls.push(parsed.toString());
@@ -244,17 +255,34 @@ function normalizeImageUrls(...inputs: unknown[]) {
   return Array.from(new Set(urls)).slice(0, 12);
 }
 
-function normalizeAspects(input: any, draft: any, extra: Record<string, unknown> = {}) {
-  const raw = { ...(input || {}), ...extra };
+function shortenAspectValue(name: string, value: unknown) {
+  let text = cleanText(value);
+  if (/^features?$/i.test(name)) {
+    text = text
+      .replace(/\bContains\s+(?=\w)/gi, "")
+      .replace(/\bAll Natural Ingredients\b/gi, "Natural Ingredients")
+      .replace(/\s*,\s*/g, ", ");
+  }
+  if (text.length <= 65) return text;
+  const cut = text.slice(0, 65).replace(/[\s,;:|/+-]+[^\s,;:|/+-]*$/g, "").replace(/[\s,;:|/+-]+$/g, "").trim();
+  return cut || text.slice(0, 65).trim();
+}
+
+function normalizeAspects(input: any, draft: any, extra: Record<string, unknown> = {}, excludeNames: string[] = []) {
+  const extraKeys = new Set(Object.keys(extra || {}).map((k) => cleanText(k).toLowerCase()));
+  const excluded = new Set(excludeNames.map((k) => cleanText(k).toLowerCase()).filter(Boolean));
+  const raw = { ...(input || {}) };
   if (draft.brand) raw.Brand = draft.brand;
   if (draft.model) raw.Model = draft.model;
   if (!raw.Brand) raw.Brand = "Unbranded";
+  Object.assign(raw, extra);
   const aspects: Record<string, string[]> = {};
   for (const [key, value] of Object.entries(raw)) {
     const name = cleanText(key);
     if (!name || /^country$/i.test(name)) continue;
+    if (excluded.has(name.toLowerCase()) && !extraKeys.has(name.toLowerCase())) continue;
     const values = (Array.isArray(value) ? value : [value])
-      .map((v) => cleanText(v))
+      .map((v) => shortenAspectValue(name, v))
       .filter(Boolean)
       .slice(0, 10);
     if (values.length) aspects[name] = Array.from(new Set(values));
@@ -340,12 +368,13 @@ function variantOptions(variant: DraftVariant, axes: string[]) {
 }
 
 async function putInventoryItem(accessToken: string, sku: string, draft: any, imageUrls: string[], aspects: Record<string, string[]>) {
+  if (imageUrls.length === 0) throw new Error(`eBay requires at least one valid http(s) image URL before publishing SKU ${sku}.`);
   const itemBody = {
     availability: { shipToLocationAvailability: { quantity: Number(draft.quantity || 1) } },
     condition: draft.condition || "NEW",
     product: {
       title: safeTitle(draft.title, draft.sku),
-      description: cleanText(draft.description, draft.title) || safeTitle(draft.title, draft.sku),
+      description: safeDescription(draft),
       aspects,
       imageUrls,
     },
@@ -387,6 +416,8 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   const axes = variantAxes(draft, variants[0]);
   const groupKey = `${draft.sku || draft.cj_product_id}-grp`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 50);
   const baseImages = normalizeImageUrls(draft.images);
+  const allImages = normalizeImageUrls(baseImages, variants.map((v) => v.variantImage || v.image));
+  if (allImages.length === 0) throw new Error("eBay requires at least one valid http(s) image URL before publishing variants.");
   const variantSKUs: string[] = [];
   const specifications = axes.map((axis) => ({ name: axis, values: Array.from(new Set(variants.map((v) => variantOptions(v, axes)[axis]).filter(Boolean))) }));
   const imageAxis = axes.find((a) => /color|colour|style|pattern/i.test(a)) || axes[0];
@@ -395,8 +426,8 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
     const sku = cleanText(variant.variantSku || variant.sku || variant.vid || `${draft.sku}-${variantSKUs.length + 1}`).replace(/\s+/g, "-").slice(0, 50);
     variantSKUs.push(sku);
     const optionAspects = variantOptions(variant, axes);
-    const imageUrls = normalizeImageUrls(variant.variantImage, variant.image, baseImages);
-    await putInventoryItem(accessToken, sku, draft, imageUrls, normalizeAspects(draft.item_specifics, draft, optionAspects));
+    const imageUrls = normalizeImageUrls(variant.variantImage, variant.image, baseImages, allImages);
+    await putInventoryItem(accessToken, sku, draft, imageUrls, normalizeAspects(draft.item_specifics, draft, optionAspects, axes));
     const variantPrice = priceNumber(variant.price ?? variant.variantSellPrice) || priceNumber(draft.price);
     await createOrUpdateOffer(accessToken, stripEmpty({
       sku,
@@ -405,7 +436,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
       availableQuantity: Number(variant.quantity || variant.inventory || draft.quantity || 1),
       categoryId: draft.category_id,
       merchantLocationKey,
-      listingDescription: cleanText(draft.description, draft.title),
+      listingDescription: safeDescription(draft),
       listingPolicies: policies,
       pricingSummary: { price: { value: String(Number(variantPrice || draft.price || 0).toFixed(2)), currency: "USD" } },
     }));
@@ -413,9 +444,9 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
 
   const groupBody = {
     title: safeTitle(draft.title, draft.sku),
-    description: cleanText(draft.description, draft.title),
-    aspects: normalizeAspects(draft.item_specifics, draft),
-    imageUrls: normalizeImageUrls(baseImages, variants.map((v) => v.variantImage || v.image)),
+    description: safeDescription(draft),
+    aspects: normalizeAspects(draft.item_specifics, draft, {}, axes),
+    imageUrls: allImages,
     variantSKUs,
     variesBy: { aspectsImageVariesBy: imageAxis ? [imageAxis] : undefined, specifications },
   };
@@ -454,7 +485,7 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
     availableQuantity: Number(draft.quantity || 1),
     categoryId: draft.category_id,
     merchantLocationKey,
-    listingDescription: cleanText(draft.description, draft.title),
+    listingDescription: safeDescription(draft),
     listingPolicies: policies,
     pricingSummary: { price: { value: String(Number(draft.price || 0).toFixed(2)), currency: "USD" } },
   };

@@ -11,6 +11,12 @@ import { useMemo, useState } from "react";
 
 export const Route = createFileRoute("/_authenticated/logs")({ component: LogsPage });
 
+type LogLevel = "success" | "info" | "warn" | "error";
+
+function isLogLevel(value: string): value is LogLevel {
+  return ["success", "info", "warn", "error"].includes(value);
+}
+
 function LogsPage() {
   const [category, setCategory] = useState("all");
   const [level, setLevel] = useState("all");
@@ -19,7 +25,7 @@ function LogsPage() {
     queryFn: async () => {
       let q = supabase.from("activity_logs").select("*").order("created_at", { ascending: false }).limit(200);
       if (category !== "all") q = q.eq("category", category);
-      if (level !== "all") q = q.eq("level", level as "success" | "info" | "warn" | "error");
+      if (isLogLevel(level)) q = q.eq("level", level);
       const { data, error } = await q;
       if (error) throw error;
       return data || [];
