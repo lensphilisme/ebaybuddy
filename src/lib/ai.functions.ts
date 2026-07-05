@@ -53,7 +53,7 @@ function sanitizeSpecifics(input: any, axes: string[] = []) {
     const value = Array.isArray(rawValue) ? rawValue.map((v) => shortAspect(key, v)).filter(Boolean).join(", ") : shortAspect(key, rawValue);
     if (value) specifics[key] = shortAspect(key, value);
   }
-  return { Condition: "New", Brand: specifics.Brand || "Unbranded", ...specifics, Model: specifics.Model || "Does not apply" };
+  return { Condition: "New", Brand: specifics.Brand || "Unbranded", ...specifics, Model: specifics.Model || "Does not apply" } as Record<string, string>;
 }
 
 function variantAxes(productKey?: unknown, sample?: any) {
