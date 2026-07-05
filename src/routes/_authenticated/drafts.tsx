@@ -35,6 +35,7 @@ function DraftsPage() {
     },
   });
   const selectedIds = useMemo(() => Object.keys(selected).filter((id) => selected[id]), [selected]);
+  const failedIds = useMemo(() => drafts.filter((d: any) => d.status === "failed").map((d: any) => d.id), [drafts]);
 
   const optimize = useMutation({
     mutationFn: async (ids: string[]) => {
@@ -81,6 +82,7 @@ function DraftsPage() {
         <Button asChild variant="outline"><Link to="/products"><Search className="h-4 w-4 mr-1" />Research CJ products</Link></Button>
         <Button disabled={!selectedIds.length || optimize.isPending} onClick={() => optimize.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI optimize selected</Button>
         <Button disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)}><Wrench className="h-4 w-4 mr-1" />AI repair eBay data</Button>
+        <Button disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => repair.mutate(failedIds)}><Wrench className="h-4 w-4 mr-1" />Repair failed drafts</Button>
         <Button disabled={!selectedIds.length || push.isPending} onClick={() => push.mutate(selectedIds)}><Rocket className="h-4 w-4 mr-1" />Push selected to eBay</Button>
       </div>
       <Card className="overflow-hidden">
