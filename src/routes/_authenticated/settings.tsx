@@ -72,7 +72,7 @@ function SettingsPage() {
         <IntegrationCard
           icon={Tag}
           title="eBay"
-          desc="Connect your seller account via OAuth. Push only enabled after you flip the Live switch in Rules."
+          desc="Connect any seller account with eBay login. No per-user API keys, client secrets or refresh tokens are needed."
           status={ebayCred.is_active ? (ebayCred.source === "env" ? "Connected (workspace token)" : "Connected") : "Needs OAuth"}
           ready={ebayCred.is_active}
         >
@@ -81,8 +81,7 @@ function SettingsPage() {
               Open eBay OAuth <ExternalLink className="h-3 w-3 ml-1" />
             </Button>
             <p className="text-xs text-muted-foreground">
-              eBay will redirect back to this app at <code className="px-1 py-0.5 rounded bg-muted">/ebay/callback</code> and store the token automatically.
-              If you completed sign-in in a tab where you weren't logged into this app, paste the code below.
+              eBay redirects back here and stores the seller token automatically for the signed-in app user.
             </p>
             <div className="flex gap-2">
               <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Optional: paste authorization code" />
