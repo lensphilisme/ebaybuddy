@@ -89,6 +89,7 @@ function DraftsPage() {
         {isLoading ? <div className="p-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : drafts.length === 0 ? (
           <div className="p-12 text-center text-sm text-muted-foreground"><FileEdit className="h-8 w-8 mx-auto mb-2" />No drafts yet. Select products from CJ research and send them here.</div>
         ) : (
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader><TableRow><TableHead /><TableHead>Product</TableHead><TableHead>Price</TableHead><TableHead>eBay category</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
             <TableBody>{drafts.map((d: any) => (
@@ -102,6 +103,7 @@ function DraftsPage() {
               </TableRow>
             ))}</TableBody>
           </Table>
+          </div>
         )}
       </Card>
     </AppShell>
