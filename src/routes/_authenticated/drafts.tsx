@@ -12,8 +12,9 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FileEdit, Loader2, MoreHorizontal, Rocket, Search, Sparkles, Wrench } from "lucide-react";
+import { AlertCircle, ChevronDown, FileEdit, Loader2, MoreHorizontal, Rocket, Search, Sparkles, Wrench } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/drafts")({ component: DraftsPage });
@@ -117,8 +118,7 @@ function DraftsPage() {
                   {suggestions[d.id]?.slice(0, 2).map((c) => <button key={c.categoryId} className="block text-left text-xs mt-1 text-primary hover:underline truncate max-w-full" onClick={() => updateDraft(d.id, { category_id: c.categoryId })}>{c.path}</button>)}
                 </TableCell>
                 <TableCell>
-                  <Badge variant={d.status === "failed" ? "destructive" : "secondary"}>{d.status}</Badge>
-                  {d.audit_reason && <div className="text-xs text-destructive mt-1 line-clamp-2">{d.audit_reason}</div>}
+                  {d.status === "failed" ? <StatusErrorPopover draft={d} /> : <Badge variant="secondary">{d.status}</Badge>}
                 </TableCell>
                 <TableCell className="text-right">
                   <DropdownMenu>
@@ -140,5 +140,72 @@ function DraftsPage() {
         )}
       </Card>
     </AppShell>
+  );
+}
+
+function StatusErrorPopover({ draft }: { draft: any }) {
+  const reason: string = draft.audit_reason || draft.error_message || draft.last_error || "";
+  const details = draft.error_details ?? draft.last_error_details ?? draft.audit_details ?? null;
+  const failedAt = draft.failed_at || draft.updated_at || draft.last_attempt_at || null;
+
+  let parsedDetails: any = details;
+  if (typeof details === "string") {
+    try { parsedDetails = JSON.parse(details); } catch { /* keep string */ }
+  }
+  const detailsText = parsedDetails
+    ? (typeof parsedDetails === "string" ? parsedDetails : JSON.stringify(parsedDetails, null, 2))
+    : "";
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-md focus:outline-none focus:ring-2 focus:ring-ring"
+          aria-label="Show error details"
+        >
+          <Badge variant="destructive" className="cursor-pointer">
+            <AlertCircle className="h-3 w-3 mr-1" />
+            failed
+            <ChevronDown className="h-3 w-3 ml-1" />
+          </Badge>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-96 max-w-[92vw] p-0">
+        <div className="p-3 border-b">
+          <div className="flex items-center gap-2 text-sm font-medium text-destructive">
+            <AlertCircle className="h-4 w-4" /> Push failed
+          </div>
+          {failedAt && (
+            <div className="text-xs text-muted-foreground mt-0.5">
+              {new Date(failedAt).toLocaleString()}
+            </div>
+          )}
+        </div>
+        <div className="p-3 space-y-3 max-h-80 overflow-auto">
+          {reason ? (
+            <div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Reason</div>
+              <div className="text-sm whitespace-pre-wrap break-words">{reason}</div>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">No reason recorded.</div>
+          )}
+          {detailsText && (
+            <div>
+              <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Details</div>
+              <pre className="text-xs bg-muted rounded p-2 whitespace-pre-wrap break-words">{detailsText}</pre>
+            </div>
+          )}
+          <div>
+            <div className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Draft</div>
+            <div className="text-xs text-muted-foreground">ID: <span className="font-mono">{draft.id}</span></div>
+            {draft.category_id === "" || draft.category_id == null ? (
+              <div className="text-xs text-destructive mt-1">Missing eBay category ID.</div>
+            ) : null}
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
