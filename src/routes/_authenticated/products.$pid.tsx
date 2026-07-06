@@ -268,21 +268,18 @@ function ProductDetailPage() {
               </div>
               {freight.error && <p className="text-xs text-destructive">{(freight.error as Error).message}</p>}
               {freight.data && freight.data.length > 0 && (
-                <div className="space-y-1 max-h-48 overflow-auto">
-                  {freight.data.map((o) => (
-                    <button
-                      key={o.logisticName}
-                      type="button"
-                      onClick={() => setSelectedCarrier(o.logisticName)}
-                      className={`w-full text-left flex items-center justify-between gap-2 p-2 rounded-md text-sm border ${selectedCarrier === o.logisticName || (!selectedCarrier && o === freight.data![0]) ? "border-primary bg-primary/5" : "border-border hover:bg-muted/50"}`}
-                    >
-                      <div className="min-w-0">
-                        <div className="font-medium truncate">{o.logisticName}</div>
-                        <div className="text-xs text-muted-foreground">{o.logisticAging} days</div>
-                      </div>
-                      <div className="font-semibold text-primary">${Number(o.logisticPrice).toFixed(2)}</div>
-                    </button>
-                  ))}
+                <div>
+                  <Label className="text-xs text-muted-foreground">Carrier</Label>
+                  <Select value={selectedCarrier || freight.data[0].logisticName} onValueChange={setSelectedCarrier}>
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {freight.data.map((o) => (
+                        <SelectItem key={o.logisticName} value={o.logisticName}>
+                          {o.logisticName} · {o.logisticAging}d · ${Number(o.logisticPrice).toFixed(2)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
               )}
             </Card>

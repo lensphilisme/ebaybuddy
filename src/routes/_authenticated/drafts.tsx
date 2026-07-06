@@ -12,7 +12,8 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FileEdit, Loader2, Rocket, Search, Sparkles, Wrench } from "lucide-react";
+import { FileEdit, Loader2, MoreHorizontal, Rocket, Search, Sparkles, Wrench } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/drafts")({ component: DraftsPage });
@@ -89,21 +90,53 @@ function DraftsPage() {
         {isLoading ? <div className="p-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : drafts.length === 0 ? (
           <div className="p-12 text-center text-sm text-muted-foreground"><FileEdit className="h-8 w-8 mx-auto mb-2" />No drafts yet. Select products from CJ research and send them here.</div>
         ) : (
-          <div className="overflow-x-auto">
-          <Table>
-            <TableHeader><TableRow><TableHead /><TableHead>Product</TableHead><TableHead>Price</TableHead><TableHead>eBay category</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+          <Table className="w-full table-fixed">
+            <TableHeader><TableRow>
+              <TableHead className="w-10" />
+              <TableHead>Product</TableHead>
+              <TableHead className="w-20">Price</TableHead>
+              <TableHead className="w-56 hidden md:table-cell">eBay category</TableHead>
+              <TableHead className="w-28">Status</TableHead>
+              <TableHead className="w-12 text-right" />
+            </TableRow></TableHeader>
             <TableBody>{drafts.map((d: any) => (
               <TableRow key={d.id}>
                 <TableCell><Checkbox checked={!!selected[d.id]} onCheckedChange={(v) => setSelected((s) => ({ ...s, [d.id]: !!v }))} /></TableCell>
-                <TableCell className="max-w-md"><div className="flex gap-3"><img src={(Array.isArray(d.images) ? d.images[0] : undefined) || ""} className="h-14 w-14 rounded object-cover bg-muted" /><div><div className="font-medium line-clamp-2">{d.title}</div><div className="text-xs text-muted-foreground">{d.sku}</div></div></div></TableCell>
+                <TableCell className="max-w-0">
+                  <div className="flex gap-3 min-w-0">
+                    <img src={(Array.isArray(d.images) ? d.images[0] : undefined) || ""} className="h-12 w-12 shrink-0 rounded object-cover bg-muted" />
+                    <div className="min-w-0">
+                      <div className="font-medium line-clamp-2 break-words">{d.title}</div>
+                      <div className="md:hidden mt-1"><Input value={d.category_id || ""} onChange={(e) => updateDraft(d.id, { category_id: e.target.value })} placeholder="eBay category ID" className="h-8 text-xs" /></div>
+                    </div>
+                  </div>
+                </TableCell>
                 <TableCell>${Number(d.price).toFixed(2)}</TableCell>
-                <TableCell className="min-w-64"><Input value={d.category_id || ""} onChange={(e) => updateDraft(d.id, { category_id: e.target.value })} placeholder="Required category ID" />{suggestions[d.id]?.slice(0, 3).map((c) => <button key={c.categoryId} className="block text-left text-xs mt-1 text-primary hover:underline" onClick={() => updateDraft(d.id, { category_id: c.categoryId })}>{c.path}</button>)}</TableCell>
-                <TableCell><Badge variant={d.status === "failed" ? "destructive" : "secondary"}>{d.status}</Badge>{d.audit_reason && <div className="text-xs text-destructive mt-1">{d.audit_reason}</div>}</TableCell>
-                <TableCell className="text-right space-x-2"><Button size="sm" variant="outline" onClick={() => suggest.mutate(d)}>Suggest</Button><Button size="sm" variant="outline" onClick={() => aiSuggest.mutate(d)} disabled={aiSuggest.isPending}>AI category</Button><Button size="sm" variant="outline" onClick={() => optimize.mutate([d.id])}>AI fill</Button><Button size="sm" variant="outline" onClick={() => repair.mutate([d.id])} disabled={repair.isPending}>AI repair</Button></TableCell>
+                <TableCell className="hidden md:table-cell">
+                  <Input value={d.category_id || ""} onChange={(e) => updateDraft(d.id, { category_id: e.target.value })} placeholder="Required" className="h-8" />
+                  {suggestions[d.id]?.slice(0, 2).map((c) => <button key={c.categoryId} className="block text-left text-xs mt-1 text-primary hover:underline truncate max-w-full" onClick={() => updateDraft(d.id, { category_id: c.categoryId })}>{c.path}</button>)}
+                </TableCell>
+                <TableCell>
+                  <Badge variant={d.status === "failed" ? "destructive" : "secondary"}>{d.status}</Badge>
+                  {d.audit_reason && <div className="text-xs text-destructive mt-1 line-clamp-2">{d.audit_reason}</div>}
+                </TableCell>
+                <TableCell className="text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild><Button size="icon" variant="ghost"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                      <DropdownMenuItem onClick={() => aiSuggest.mutate(d)}>AI pick category</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => suggest.mutate(d)}>eBay category suggest</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => optimize.mutate([d.id])}>AI fill specifics</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => repair.mutate([d.id])}>AI repair for eBay</DropdownMenuItem>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={() => push.mutate([d.id])}>Push to eBay</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
               </TableRow>
             ))}</TableBody>
           </Table>
-          </div>
         )}
       </Card>
     </AppShell>

@@ -297,19 +297,24 @@ function priceNumber(value: unknown) {
 }
 
 function locationForDraft(draft: any) {
-  const country = cleanText(draft?.profit?.start_country || draft?.profit?.warehouse_country || "US").toUpperCase().slice(0, 2) || "US";
-  const postalByCountry: Record<string, string> = { US: "10001", CN: "518000", GB: "SW1A 1AA", CA: "M5H 2N2", AU: "2000", DE: "10115", FR: "75001" };
-  return {
-    key: `droplist_${country.toLowerCase()}`.slice(0, 36),
-    country,
-    postalCode: postalByCountry[country] || "10001",
+  const country = cleanText(draft?.profit?.start_country || draft?.profit?.warehouse_country || draft?.profit?.countryFrom || "CN").toUpperCase().slice(0, 2) || "CN";
+  const cfg: Record<string, { postal: string; city: string; state?: string }> = {
+    US: { postal: "90001", city: "Los Angeles", state: "CA" },
+    CN: { postal: "518000", city: "Shenzhen", state: "GD" },
+    GB: { postal: "SW1A 1AA", city: "London" },
+    CA: { postal: "M5H 2N2", city: "Toronto", state: "ON" },
+    AU: { postal: "2000", city: "Sydney", state: "NSW" },
+    DE: { postal: "10115", city: "Berlin" },
+    FR: { postal: "75001", city: "Paris" },
   };
+  const c = cfg[country] || cfg.CN;
+  return { key: `droplist_${country.toLowerCase()}`.slice(0, 36), country, postalCode: c.postal, city: c.city, stateOrProvince: c.state };
 }
 
 async function ensureInventoryLocation(accessToken: string, draft: any) {
   const loc = locationForDraft(draft);
   const body = {
-    location: { address: { country: loc.country, postalCode: loc.postalCode } },
+    location: { address: stripEmpty({ country: loc.country, postalCode: loc.postalCode, city: loc.city, stateOrProvince: loc.stateOrProvince }) },
     name: `DropList ${loc.country} fulfillment`,
     merchantLocationStatus: "ENABLED",
     locationTypes: ["WAREHOUSE"],
@@ -328,6 +333,65 @@ async function ensureInventoryLocation(accessToken: string, draft: any) {
     headers: { Authorization: `Bearer ${accessToken}`, "Accept-Language": "en-US" },
   }).catch(() => undefined);
   return loc.key;
+}
+
+// Fetch required/recommended aspects for a category via eBay Taxonomy API.
+export async function getItemAspectsForCategory(accessToken: string, categoryId: string, marketplaceId = "EBAY_US") {
+  try {
+    const treeRes = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${marketplaceId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const tree = await treeRes.json();
+    if (!treeRes.ok) return {} as Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>;
+    const res = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/category_tree/${tree.categoryTreeId}/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const json = await res.json();
+    if (!res.ok) return {};
+    const out: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }> = {};
+    for (const a of json.aspects || []) {
+      const name = String(a?.localizedAspectName || "").trim();
+      if (!name) continue;
+      const c = a.aspectConstraint || {};
+      const values = (a.aspectValues || []).map((v: any) => String(v.localizedValue || "").trim()).filter(Boolean);
+      out[name] = {
+        required: !!c.aspectRequired,
+        allowed: c.aspectMode === "SELECTION_ONLY" && values.length ? values : undefined,
+        maxLen: Number(c.aspectMaxLength || 65) || 65,
+      };
+    }
+    return out;
+  } catch { return {}; }
+}
+
+function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
+  if (!Object.keys(catalog).length) return aspects;
+  const nameByLower: Record<string, string> = {};
+  for (const k of Object.keys(catalog)) nameByLower[k.toLowerCase()] = k;
+  const out: Record<string, string[]> = {};
+  for (const [name, values] of Object.entries(aspects)) {
+    const canonical = nameByLower[name.toLowerCase()] || name;
+    const spec = catalog[canonical];
+    if (!spec && !/^(brand|condition|mpn|model)$/i.test(canonical)) continue;
+    const maxLen = spec?.maxLen ?? 65;
+    let cleanValues = values
+      .map((v) => String(v).replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, "").trim())
+      .filter(Boolean)
+      .map((v) => v.slice(0, maxLen));
+    if (spec?.allowed?.length) {
+      const allowedLower = new Map(spec.allowed.map((v) => [v.toLowerCase(), v]));
+      cleanValues = cleanValues.map((v) => allowedLower.get(v.toLowerCase()) || "").filter(Boolean);
+      if (!cleanValues.length && spec.allowed.includes("Does Not Apply")) cleanValues = ["Does Not Apply"];
+    }
+    if (cleanValues.length) out[canonical] = Array.from(new Set(cleanValues));
+  }
+  for (const [name, spec] of Object.entries(catalog)) {
+    if (!spec.required || out[name]) continue;
+    if (spec.allowed?.includes("Does Not Apply")) out[name] = ["Does Not Apply"];
+    else if (spec.allowed?.length) out[name] = [spec.allowed[0]];
+    else out[name] = ["Does Not Apply"];
+  }
+  return out;
 }
 
 type DraftVariant = {
@@ -412,7 +476,7 @@ async function createOrUpdateOffer(accessToken: string, offerBody: any) {
   return offerId!;
 }
 
-async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[]) {
+async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[], aspectCatalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
   const axes = variantAxes(draft, variants[0]);
   const groupKey = `${draft.sku || draft.cj_product_id}-grp`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 50);
   const baseImages = normalizeImageUrls(draft.images);
@@ -427,7 +491,10 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
     variantSKUs.push(sku);
     const optionAspects = variantOptions(variant, axes);
     const imageUrls = normalizeImageUrls(variant.variantImage, variant.image, baseImages, allImages);
-    await putInventoryItem(accessToken, sku, draft, imageUrls, normalizeAspects(draft.item_specifics, draft, optionAspects, axes));
+    const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, optionAspects, axes), aspectCatalog);
+    // ensure variation-axis values are present per-variant even if catalog excluded them
+    for (const [k, v] of Object.entries(optionAspects)) if (v) aspects[k] = [String(v).slice(0, 65)];
+    await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
     const variantPrice = priceNumber(variant.price ?? variant.variantSellPrice) || priceNumber(draft.price);
     await createOrUpdateOffer(accessToken, stripEmpty({
       sku,
@@ -445,7 +512,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   const groupBody = {
     title: safeTitle(draft.title, draft.sku),
     description: safeDescription(draft),
-    aspects: normalizeAspects(draft.item_specifics, draft, {}, axes),
+    aspects: filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog),
     imageUrls: allImages,
     variantSKUs,
     variesBy: { aspectsImageVariesBy: imageAxis ? [imageAxis] : undefined, specifications },
@@ -470,13 +537,15 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
 export async function publishInventoryItem(accessToken: string, draft: any) {
   const policies = await fetchDefaultSellerPolicies(accessToken);
   const merchantLocationKey = await ensureInventoryLocation(accessToken, draft);
+  const aspectCatalog = draft.category_id ? await getItemAspectsForCategory(accessToken, String(draft.category_id)) : {};
   const sku = draft.sku || `cj-${draft.cj_product_id}`;
   const variants = variantRowsFromDraft(draft);
-  if (variants.length > 1) return publishVariantGroup(accessToken, draft, policies, merchantLocationKey, variants);
+  if (variants.length > 1) return publishVariantGroup(accessToken, draft, policies, merchantLocationKey, variants, aspectCatalog);
 
   const imageUrls = normalizeImageUrls(draft.images);
   if (imageUrls.length === 0) throw new Error("eBay requires at least one valid http(s) image URL before publishing.");
-  await putInventoryItem(accessToken, sku, draft, imageUrls, normalizeAspects(draft.item_specifics, draft));
+  const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft), aspectCatalog);
+  await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
 
   const offerBody: any = {
     sku,
@@ -498,7 +567,6 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
   });
   const publishJson = await publish.json().catch(() => ({}));
   if (!publish.ok) {
-    // If already published, look up the listingId from the offer record and treat as success.
     const alreadyPublished = (publishJson.errors || []).some((e: any) => /already.*published|listing.*already/i.test(e.longMessage || e.message || ""));
     if (alreadyPublished) {
       const existing = await findOfferBySku(accessToken, sku);

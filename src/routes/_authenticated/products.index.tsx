@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getCjCategories, searchCjProducts } from "@/lib/cj.functions";
@@ -21,14 +21,16 @@ export const Route = createFileRoute("/_authenticated/products/")({
 const PAGE_SIZES = [10, 20, 40, 50, 100] as const;
 
 function ProductsPage() {
-  const [keyword, setKeyword] = useState("");
-  const [query, setQuery] = useState<{ keyword: string; pageNum: number; pageSize: number; categoryId?: string; countryCode?: string }>({
-    keyword: "",
-    pageNum: 1,
-    pageSize: 20,
-  });
-  const [categoryId, setCategoryId] = useState("all");
-  const [countryCode, setCountryCode] = useState("all");
+  const initial = (() => {
+    if (typeof window === "undefined") return null;
+    try { return JSON.parse(sessionStorage.getItem("cj-products-search") || "null"); } catch { return null; }
+  })();
+  const [keyword, setKeyword] = useState<string>(initial?.keyword ?? "");
+  const [query, setQuery] = useState<{ keyword: string; pageNum: number; pageSize: number; categoryId?: string; countryCode?: string }>(
+    initial?.query ?? { keyword: "", pageNum: 1, pageSize: 20 },
+  );
+  const [categoryId, setCategoryId] = useState<string>(initial?.categoryId ?? "all");
+  const [countryCode, setCountryCode] = useState<string>(initial?.countryCode ?? "all");
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
 
@@ -58,6 +60,29 @@ function ProductsPage() {
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
+
+  // Persist search state so navigation back to /products preserves results.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { sessionStorage.setItem("cj-products-search", JSON.stringify({ keyword, query, categoryId, countryCode })); } catch { /* ignore */ }
+  }, [keyword, query, categoryId, countryCode]);
+
+  // Which visible products are already listed or in draft?
+  const pids = items.map((p) => p.pid);
+  const { data: statusMap = {} } = useQuery({
+    queryKey: ["cj-listed-map", pids.join(",")],
+    enabled: pids.length > 0,
+    queryFn: async () => {
+      const map: Record<string, "listed" | "draft"> = {};
+      const [listings, drafts] = await Promise.all([
+        supabase.from("ebay_listings").select("cj_product_id,status").in("cj_product_id", pids),
+        supabase.from("listing_drafts").select("cj_product_id").in("cj_product_id", pids),
+      ]);
+      for (const r of listings.data || []) if (r.cj_product_id) map[r.cj_product_id] = "listed";
+      for (const r of drafts.data || []) if (r.cj_product_id && !map[r.cj_product_id]) map[r.cj_product_id] = "draft";
+      return map;
+    },
+  });
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -197,6 +222,8 @@ function ProductsPage() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {items.map((p) => {
               const checked = !!selected[p.pid];
+              const status = (statusMap as any)[p.pid];
+              const toggle = () => setSelected((s) => ({ ...s, [p.pid]: !s[p.pid] }));
               return (
                 <Card key={p.pid} className={`group relative overflow-hidden transition ${checked ? "ring-2 ring-primary" : ""}`}>
                   <div className="absolute top-2 left-2 z-10">
@@ -206,11 +233,14 @@ function ProductsPage() {
                       className="bg-background/90 border-border"
                     />
                   </div>
-                  <Link
-                    to="/products/$pid"
-                    params={{ pid: p.pid }}
-                    className="block"
-                  >
+                  {status && (
+                    <div className="absolute top-2 right-2 z-10">
+                      <Badge variant={status === "listed" ? "default" : "secondary"} className="text-[10px]">
+                        {status === "listed" ? "Listed on eBay" : "In draft"}
+                      </Badge>
+                    </div>
+                  )}
+                  <button type="button" onClick={toggle} aria-label={checked ? "Deselect" : "Select"} className="block w-full text-left">
                     <div className="aspect-square bg-muted overflow-hidden">
                       {p.productImage && (
                         <img
@@ -221,16 +251,18 @@ function ProductsPage() {
                         />
                       )}
                     </div>
-                    <div className="p-3">
-                      <p className="text-sm font-medium line-clamp-2 leading-snug min-h-[2.5rem]">{p.productNameEn}</p>
-                      <div className="mt-2 flex items-center justify-between">
-                        <span className="font-semibold text-primary">${Number(p.sellPrice).toFixed(2)}</span>
-                        {p.categoryName && (
-                          <Badge variant="secondary" className="text-[10px] truncate max-w-[60%]">{p.categoryName}</Badge>
-                        )}
-                      </div>
+                  </button>
+                  <div className="p-3">
+                    <Link to="/products/$pid" params={{ pid: p.pid }} className="text-sm font-medium line-clamp-2 leading-snug min-h-[2.5rem] hover:underline block">
+                      {p.productNameEn}
+                    </Link>
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="font-semibold text-primary">${Number(p.sellPrice).toFixed(2)}</span>
+                      {p.categoryName && (
+                        <Badge variant="secondary" className="text-[10px] truncate max-w-[60%]">{p.categoryName}</Badge>
+                      )}
                     </div>
-                  </Link>
+                  </div>
                 </Card>
               );
             })}
