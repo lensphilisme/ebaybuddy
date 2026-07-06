@@ -62,7 +62,7 @@ function ProductsPage() {
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
 
   // Persist search state so navigation back to /products preserves results.
-  useMemo(() => {
+  useEffect(() => {
     if (typeof window === "undefined") return;
     try { sessionStorage.setItem("cj-products-search", JSON.stringify({ keyword, query, categoryId, countryCode })); } catch { /* ignore */ }
   }, [keyword, query, categoryId, countryCode]);
