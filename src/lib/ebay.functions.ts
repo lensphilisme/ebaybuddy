@@ -105,10 +105,35 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
     for (const draft of drafts || []) {
       try {
         if (!draft.category_id) throw new Error("Missing eBay category");
-        const pushed = await publishInventoryItem(token, draft);
-        await context.supabase.from("listing_drafts").update({ status: "pushed", ebay_listing_id: null }).eq("id", draft.id);
-        await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: draft.sku, title: draft.title, price: draft.price, cj_product_id: draft.cj_product_id, cj_landed_cost: Number((draft.profit || {}).item_cost || 0) + Number((draft.profit || {}).shipping || 0) });
-        await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Pushed draft to eBay: ${draft.title}`, metadata: { draftId: draft.id, listingId: pushed.listingId, offerId: pushed.offerId } });
+        // Duplicate guard: refuse to push the same CJ product twice.
+        if (draft.cj_product_id) {
+          const { data: existing } = await context.supabase
+            .from("ebay_listings")
+            .select("id,ebay_item_id")
+            .eq("user_id", context.userId)
+            .eq("cj_product_id", draft.cj_product_id)
+            .in("status", ["active", "pushed"])
+            .limit(1)
+            .maybeSingle();
+          if (existing?.id) throw new Error(`Already listed on eBay (item ${existing.ebay_item_id || existing.id}). Skipping duplicate.`);
+        }
+        // Ensure start_country is set from CJ so inventory location is valid.
+        let workingDraft = draft;
+        if (!draft.profit?.start_country) {
+          try {
+            const { cjProductDetail, getUserCjToken } = await import("./cj.server");
+            const cjToken = await getUserCjToken(context.supabase, context.userId);
+            const detail: any = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", cjToken);
+            const startCountry = (detail?.countryCode || detail?.countryFrom || detail?.sourceFrom || "CN").toString().toUpperCase().slice(0, 2);
+            workingDraft = { ...draft, profit: { ...(draft.profit || {}), start_country: startCountry } };
+            await context.supabase.from("listing_drafts").update({ profit: workingDraft.profit }).eq("id", draft.id);
+          } catch { /* fall back to CN default in publish */ }
+        }
+        const pushed = await publishInventoryItem(token, workingDraft);
+        await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: draft.sku, title: draft.title, price: draft.price, cj_product_id: draft.cj_product_id, status: "active", cj_landed_cost: Number((draft.profit || {}).item_cost || 0) + Number((draft.profit || {}).shipping || 0) });
+        // Auto-remove pushed draft from queue.
+        await context.supabase.from("listing_drafts").delete().eq("id", draft.id);
+        await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Pushed to eBay: ${draft.title}`, metadata: { draftId: draft.id, listingId: pushed.listingId, offerId: pushed.offerId } });
         results.push({ draftId: draft.id, ok: true, ...pushed });
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
