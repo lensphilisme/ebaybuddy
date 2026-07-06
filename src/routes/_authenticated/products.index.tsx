@@ -222,6 +222,8 @@ function ProductsPage() {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {items.map((p) => {
               const checked = !!selected[p.pid];
+              const status = (statusMap as any)[p.pid];
+              const toggle = () => setSelected((s) => ({ ...s, [p.pid]: !s[p.pid] }));
               return (
                 <Card key={p.pid} className={`group relative overflow-hidden transition ${checked ? "ring-2 ring-primary" : ""}`}>
                   <div className="absolute top-2 left-2 z-10">
@@ -231,11 +233,14 @@ function ProductsPage() {
                       className="bg-background/90 border-border"
                     />
                   </div>
-                  <Link
-                    to="/products/$pid"
-                    params={{ pid: p.pid }}
-                    className="block"
-                  >
+                  {status && (
+                    <div className="absolute top-2 right-2 z-10">
+                      <Badge variant={status === "listed" ? "default" : "secondary"} className="text-[10px]">
+                        {status === "listed" ? "Listed on eBay" : "In draft"}
+                      </Badge>
+                    </div>
+                  )}
+                  <button type="button" onClick={toggle} aria-label={checked ? "Deselect" : "Select"} className="block w-full text-left">
                     <div className="aspect-square bg-muted overflow-hidden">
                       {p.productImage && (
                         <img
@@ -246,16 +251,18 @@ function ProductsPage() {
                         />
                       )}
                     </div>
-                    <div className="p-3">
-                      <p className="text-sm font-medium line-clamp-2 leading-snug min-h-[2.5rem]">{p.productNameEn}</p>
-                      <div className="mt-2 flex items-center justify-between">
-                        <span className="font-semibold text-primary">${Number(p.sellPrice).toFixed(2)}</span>
-                        {p.categoryName && (
-                          <Badge variant="secondary" className="text-[10px] truncate max-w-[60%]">{p.categoryName}</Badge>
-                        )}
-                      </div>
+                  </button>
+                  <div className="p-3">
+                    <Link to="/products/$pid" params={{ pid: p.pid }} className="text-sm font-medium line-clamp-2 leading-snug min-h-[2.5rem] hover:underline block">
+                      {p.productNameEn}
+                    </Link>
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="font-semibold text-primary">${Number(p.sellPrice).toFixed(2)}</span>
+                      {p.categoryName && (
+                        <Badge variant="secondary" className="text-[10px] truncate max-w-[60%]">{p.categoryName}</Badge>
+                      )}
                     </div>
-                  </Link>
+                  </div>
                 </Card>
               );
             })}
