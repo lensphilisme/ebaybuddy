@@ -192,7 +192,7 @@ export const repairDraftForEbay = createServerFn({ method: "POST" })
       images: baseImages,
       status: "pending",
       audit_reason: baseImages.length ? "AI repaired CJ data into eBay format. Retry push." : "AI repaired text/specs, but a valid image URL is still required before push.",
-      profit: { ...(draft.profit || {}), product_key: cjDetail?.productKeyEn || draft.profit?.product_key || null, variant_axes: axes, variant_group: variants.length > 1 ? { variants } : draft.profit?.variant_group || null, cj_refresh_cached_at: cjDetail ? new Date().toISOString() : draft.profit?.cj_refresh_cached_at || null },
+      profit: { ...(draft.profit || {}), start_country: (draft.profit?.start_country || (cjDetail as any)?.countryCode || (cjDetail as any)?.countryFrom || "CN").toString().toUpperCase().slice(0, 2), product_key: cjDetail?.productKeyEn || draft.profit?.product_key || null, variant_axes: axes, variant_group: variants.length > 1 ? { variants } : draft.profit?.variant_group || null, cj_refresh_cached_at: cjDetail ? new Date().toISOString() : draft.profit?.cj_refresh_cached_at || null },
     };
 
     await context.supabase.from("listing_drafts").update(patch).eq("id", draft.id);
