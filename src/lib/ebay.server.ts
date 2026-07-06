@@ -476,7 +476,7 @@ async function createOrUpdateOffer(accessToken: string, offerBody: any) {
   return offerId!;
 }
 
-async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[]) {
+async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[], aspectCatalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
   const axes = variantAxes(draft, variants[0]);
   const groupKey = `${draft.sku || draft.cj_product_id}-grp`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 50);
   const baseImages = normalizeImageUrls(draft.images);
@@ -491,7 +491,10 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
     variantSKUs.push(sku);
     const optionAspects = variantOptions(variant, axes);
     const imageUrls = normalizeImageUrls(variant.variantImage, variant.image, baseImages, allImages);
-    await putInventoryItem(accessToken, sku, draft, imageUrls, normalizeAspects(draft.item_specifics, draft, optionAspects, axes));
+    const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, optionAspects, axes), aspectCatalog);
+    // ensure variation-axis values are present per-variant even if catalog excluded them
+    for (const [k, v] of Object.entries(optionAspects)) if (v) aspects[k] = [String(v).slice(0, 65)];
+    await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
     const variantPrice = priceNumber(variant.price ?? variant.variantSellPrice) || priceNumber(draft.price);
     await createOrUpdateOffer(accessToken, stripEmpty({
       sku,
@@ -509,7 +512,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   const groupBody = {
     title: safeTitle(draft.title, draft.sku),
     description: safeDescription(draft),
-    aspects: normalizeAspects(draft.item_specifics, draft, {}, axes),
+    aspects: filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog),
     imageUrls: allImages,
     variantSKUs,
     variesBy: { aspectsImageVariesBy: imageAxis ? [imageAxis] : undefined, specifications },
@@ -534,13 +537,15 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
 export async function publishInventoryItem(accessToken: string, draft: any) {
   const policies = await fetchDefaultSellerPolicies(accessToken);
   const merchantLocationKey = await ensureInventoryLocation(accessToken, draft);
+  const aspectCatalog = draft.category_id ? await getItemAspectsForCategory(accessToken, String(draft.category_id)) : {};
   const sku = draft.sku || `cj-${draft.cj_product_id}`;
   const variants = variantRowsFromDraft(draft);
-  if (variants.length > 1) return publishVariantGroup(accessToken, draft, policies, merchantLocationKey, variants);
+  if (variants.length > 1) return publishVariantGroup(accessToken, draft, policies, merchantLocationKey, variants, aspectCatalog);
 
   const imageUrls = normalizeImageUrls(draft.images);
   if (imageUrls.length === 0) throw new Error("eBay requires at least one valid http(s) image URL before publishing.");
-  await putInventoryItem(accessToken, sku, draft, imageUrls, normalizeAspects(draft.item_specifics, draft));
+  const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft), aspectCatalog);
+  await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
 
   const offerBody: any = {
     sku,
@@ -562,7 +567,6 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
   });
   const publishJson = await publish.json().catch(() => ({}));
   if (!publish.ok) {
-    // If already published, look up the listingId from the offer record and treat as success.
     const alreadyPublished = (publishJson.errors || []).some((e: any) => /already.*published|listing.*already/i.test(e.longMessage || e.message || ""));
     if (alreadyPublished) {
       const existing = await findOfferBySku(accessToken, sku);
