@@ -21,14 +21,16 @@ export const Route = createFileRoute("/_authenticated/products/")({
 const PAGE_SIZES = [10, 20, 40, 50, 100] as const;
 
 function ProductsPage() {
-  const [keyword, setKeyword] = useState("");
-  const [query, setQuery] = useState<{ keyword: string; pageNum: number; pageSize: number; categoryId?: string; countryCode?: string }>({
-    keyword: "",
-    pageNum: 1,
-    pageSize: 20,
-  });
-  const [categoryId, setCategoryId] = useState("all");
-  const [countryCode, setCountryCode] = useState("all");
+  const initial = (() => {
+    if (typeof window === "undefined") return null;
+    try { return JSON.parse(sessionStorage.getItem("cj-products-search") || "null"); } catch { return null; }
+  })();
+  const [keyword, setKeyword] = useState<string>(initial?.keyword ?? "");
+  const [query, setQuery] = useState<{ keyword: string; pageNum: number; pageSize: number; categoryId?: string; countryCode?: string }>(
+    initial?.query ?? { keyword: "", pageNum: 1, pageSize: 20 },
+  );
+  const [categoryId, setCategoryId] = useState<string>(initial?.categoryId ?? "all");
+  const [countryCode, setCountryCode] = useState<string>(initial?.countryCode ?? "all");
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
 
@@ -58,6 +60,29 @@ function ProductsPage() {
   const total = data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
+
+  // Persist search state so navigation back to /products preserves results.
+  useMemo(() => {
+    if (typeof window === "undefined") return;
+    try { sessionStorage.setItem("cj-products-search", JSON.stringify({ keyword, query, categoryId, countryCode })); } catch { /* ignore */ }
+  }, [keyword, query, categoryId, countryCode]);
+
+  // Which visible products are already listed or in draft?
+  const pids = items.map((p) => p.pid);
+  const { data: statusMap = {} } = useQuery({
+    queryKey: ["cj-listed-map", pids.join(",")],
+    enabled: pids.length > 0,
+    queryFn: async () => {
+      const map: Record<string, "listed" | "draft"> = {};
+      const [listings, drafts] = await Promise.all([
+        supabase.from("ebay_listings").select("cj_product_id,status").in("cj_product_id", pids),
+        supabase.from("listing_drafts").select("cj_product_id").in("cj_product_id", pids),
+      ]);
+      for (const r of listings.data || []) if (r.cj_product_id) map[r.cj_product_id] = "listed";
+      for (const r of drafts.data || []) if (r.cj_product_id && !map[r.cj_product_id]) map[r.cj_product_id] = "draft";
+      return map;
+    },
+  });
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
