@@ -12,7 +12,8 @@ import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { FileEdit, Loader2, Rocket, Search, Sparkles, Wrench } from "lucide-react";
+import { FileEdit, Loader2, MoreHorizontal, Rocket, Search, Sparkles, Wrench } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/drafts")({ component: DraftsPage });
