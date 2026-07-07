@@ -219,13 +219,13 @@ function ProductsPage() {
         </Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
             {items.map((p) => {
               const checked = !!selected[p.pid];
               const status = (statusMap as any)[p.pid];
               const toggle = () => setSelected((s) => ({ ...s, [p.pid]: !s[p.pid] }));
               return (
-                <Card key={p.pid} className={`group relative overflow-hidden transition ${checked ? "ring-2 ring-primary" : ""}`}>
+                <Card key={p.pid} className={`group relative overflow-hidden border-0 bg-[var(--gradient-hero)] shadow-[var(--shadow-card)] transition hover:-translate-y-0.5 hover:shadow-[var(--shadow-elevated)] ${checked ? "ring-2 ring-primary" : ""}`}>
                   <div className="absolute top-2 left-2 z-10">
                     <Checkbox
                       checked={checked}
@@ -252,15 +252,15 @@ function ProductsPage() {
                       )}
                     </div>
                   </button>
-                  <div className="p-3">
-                    <Link to="/products/$pid" params={{ pid: p.pid }} className="text-sm font-medium line-clamp-2 leading-snug min-h-[2.5rem] hover:underline block">
-                      {p.productNameEn}
+                   <div className="p-3 bg-card/90 backdrop-blur">
+                     <Link to="/products/$pid" params={{ pid: p.pid }} className="block min-h-[2.25rem] text-sm font-extrabold font-display leading-snug hover:underline">
+                       {truncateName(p.productNameEn, 20)}
                     </Link>
-                    <div className="mt-2 flex items-center justify-between">
-                      <span className="font-semibold text-primary">${Number(p.sellPrice).toFixed(2)}</span>
+                     <div className="mt-2 flex items-start justify-between gap-2">
                       {p.categoryName && (
-                        <Badge variant="secondary" className="text-[10px] truncate max-w-[60%]">{p.categoryName}</Badge>
+                         <Badge variant="secondary" className="min-w-0 flex-1 justify-start truncate text-[10px]">{truncateName(p.categoryName, 18)}</Badge>
                       )}
+                       <span className="shrink-0 rounded-md bg-primary px-2 py-1 text-xs font-extrabold text-primary-foreground shadow-sm">${Number(p.sellPrice).toFixed(2)}</span>
                     </div>
                   </div>
                 </Card>
@@ -294,4 +294,9 @@ function ProductsPage() {
       )}
     </AppShell>
   );
+}
+
+function truncateName(value: unknown, max = 20) {
+  const text = String(value ?? "").trim();
+  return text.length > max ? `${text.slice(0, max).trim()}…` : text;
 }
