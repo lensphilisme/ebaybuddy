@@ -381,8 +381,10 @@ export async function getItemAspectsForCategory(accessToken: string, categoryId:
 }
 
 function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>, excludeNames: string[] = []) {
-  if (!Object.keys(catalog).length) return aspects;
   const excluded = new Set(excludeNames.map((name) => cleanText(name).toLowerCase()).filter(Boolean));
+  if (!Object.keys(catalog).length) {
+    return Object.fromEntries(Object.entries(aspects).filter(([name]) => !excluded.has(cleanText(name).toLowerCase())));
+  }
   const nameByLower: Record<string, string> = {};
   for (const k of Object.keys(catalog)) nameByLower[k.toLowerCase()] = k;
   const out: Record<string, string[]> = {};

@@ -111,12 +111,12 @@ export function AppShell({ children, title, subtitle, actions }: {
           {children}
         </main>
       </div>
-      <nav className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-5 border-t border-border bg-card/95 px-1 py-1.5 shadow-[var(--shadow-elevated)] backdrop-blur lg:hidden">
-        {NAV.slice(0, 5).map((item) => {
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex gap-1 overflow-x-auto border-t border-border bg-card/95 px-1 py-1.5 shadow-[var(--shadow-elevated)] backdrop-blur lg:hidden">
+        {NAV.map((item) => {
           const active = pathname.startsWith(item.to);
           const Icon = item.icon;
           return (
-            <Link key={item.to} to={item.to} className={cn("flex flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[10px] font-semibold transition", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}>
+            <Link key={item.to} to={item.to} className={cn("flex min-w-[68px] flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[10px] font-semibold transition", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}>
               <Icon className="h-4 w-4" />
               <span className="truncate">{item.label.replace("CJ ", "")}</span>
             </Link>

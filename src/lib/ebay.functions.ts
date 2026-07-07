@@ -76,11 +76,11 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
   const images = cleanImages(draft.images, detail?.productImageSet, detail?.productImages, detail?.bigImage, detail?.productImage);
   const variants = repairVariants(detail, draft, images);
   const itemSpecifics = {
+    ...(draft.item_specifics || {}),
     Brand: compactText(draft.brand || draft.item_specifics?.Brand || detail?.brand, "Unbranded"),
-    Type: inferType(title, detail, draft),
+    Type: compactText(draft.item_specifics?.Type, inferType(title, detail, draft)),
     Model: compactText(draft.model || draft.item_specifics?.Model, "Does Not Apply"),
     MPN: compactText(draft.item_specifics?.MPN, "Does Not Apply"),
-    ...(draft.item_specifics || {}),
   };
   const repaired = {
     ...draft,
@@ -90,7 +90,7 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
     item_specifics: itemSpecifics,
     brand: itemSpecifics.Brand,
     model: itemSpecifics.Model,
-    status: "pending",
+    status: "pending" as const,
     audit_reason: `Auto-repaired CJ data after eBay error: ${reason.slice(0, 180)}`,
     profit: {
       ...(draft.profit || {}),
