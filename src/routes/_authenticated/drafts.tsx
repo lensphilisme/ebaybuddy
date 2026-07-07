@@ -1,6 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { optimizeDraftWithAi, repairDraftForEbay } from "@/lib/ai.functions";
@@ -187,7 +187,8 @@ function DraftsPage() {
 function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; onOpenChange: (open: boolean) => void; onSaved: () => void }) {
   const [form, setForm] = useState<any>({});
 
-  if (draft && form.id !== draft.id) {
+  useEffect(() => {
+    if (!draft) return;
     setForm({
       id: draft.id,
       title: draft.title || "",
@@ -199,7 +200,7 @@ function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; 
       images: Array.isArray(draft.images) ? draft.images.join("\n") : "",
       item_specifics: JSON.stringify(draft.item_specifics || {}, null, 2),
     });
-  }
+  }, [draft]);
 
   const save = useMutation({
     mutationFn: async () => {
@@ -214,7 +215,7 @@ function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; 
         model: String(form.model || "").trim() || null,
         images: String(form.images || "").split(/\n+/).map((s) => s.trim()).filter(Boolean),
         item_specifics: specifics,
-        status: "pending",
+        status: "pending" as const,
         audit_reason: "Edited manually. Ready to retry push.",
       };
       const { error } = await supabase.from("listing_drafts").update(patch).eq("id", draft.id);
