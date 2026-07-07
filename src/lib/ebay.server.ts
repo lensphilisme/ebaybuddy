@@ -275,6 +275,9 @@ function normalizeAspects(input: any, draft: any, extra: Record<string, unknown>
   if (draft.brand) raw.Brand = draft.brand;
   if (draft.model) raw.Model = draft.model;
   if (!raw.Brand) raw.Brand = "Unbranded";
+  if (!raw.Model) raw.Model = "Does Not Apply";
+  if (!raw.MPN) raw.MPN = cleanText(draft.mpn, "Does Not Apply");
+  if (!raw.Type) raw.Type = inferProductType(draft);
   Object.assign(raw, extra);
   const aspects: Record<string, string[]> = {};
   for (const [key, value] of Object.entries(raw)) {
@@ -288,6 +291,19 @@ function normalizeAspects(input: any, draft: any, extra: Record<string, unknown>
     if (values.length) aspects[name] = Array.from(new Set(values));
   }
   return aspects;
+}
+
+function inferProductType(draft: any) {
+  const existing = cleanText(draft?.item_specifics?.Type || draft?.type || draft?.productType || draft?.category_name || draft?.categoryName);
+  if (existing) return shortenAspectValue("Type", existing);
+  const title = safeTitle(draft?.title, draft?.sku);
+  const words = title
+    .replace(/\b(new|for|with|and|the|a|an|portable|adjustable|hot|sale)\b/gi, " ")
+    .split(/\s+/)
+    .map((w) => cleanText(w))
+    .filter((w) => w.length > 2)
+    .slice(0, 4);
+  return shortenAspectValue("Type", words.join(" ") || "General Product") || "General Product";
 }
 
 function priceNumber(value: unknown) {
@@ -364,15 +380,19 @@ export async function getItemAspectsForCategory(accessToken: string, categoryId:
   } catch { return {}; }
 }
 
-function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
-  if (!Object.keys(catalog).length) return aspects;
+function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>, excludeNames: string[] = []) {
+  const excluded = new Set(excludeNames.map((name) => cleanText(name).toLowerCase()).filter(Boolean));
+  if (!Object.keys(catalog).length) {
+    return Object.fromEntries(Object.entries(aspects).filter(([name]) => !excluded.has(cleanText(name).toLowerCase())));
+  }
   const nameByLower: Record<string, string> = {};
   for (const k of Object.keys(catalog)) nameByLower[k.toLowerCase()] = k;
   const out: Record<string, string[]> = {};
   for (const [name, values] of Object.entries(aspects)) {
     const canonical = nameByLower[name.toLowerCase()] || name;
+    if (excluded.has(canonical.toLowerCase())) continue;
     const spec = catalog[canonical];
-    if (!spec && !/^(brand|condition|mpn|model)$/i.test(canonical)) continue;
+    if (!spec && !/^(brand|condition|mpn|model|type|features)$/i.test(canonical)) continue;
     const maxLen = spec?.maxLen ?? 65;
     let cleanValues = values
       .map((v) => String(v).replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, "").trim())
@@ -386,6 +406,7 @@ function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Rec
     if (cleanValues.length) out[canonical] = Array.from(new Set(cleanValues));
   }
   for (const [name, spec] of Object.entries(catalog)) {
+    if (excluded.has(name.toLowerCase())) continue;
     if (!spec.required || out[name]) continue;
     if (spec.allowed?.includes("Does Not Apply")) out[name] = ["Does Not Apply"];
     else if (spec.allowed?.length) out[name] = [spec.allowed[0]];
@@ -422,6 +443,42 @@ function variantAxes(draft: any, sample: DraftVariant) {
   const sampleParts = cleanText(sample.variantKey || sample.variantNameEn || "").split(/[-,/|]+/).filter(Boolean);
   if (sampleParts.length <= 1) return ["Option"];
   return sampleParts.map((_, i) => `Option ${i + 1}`);
+}
+
+const ITEM_SPECIFIC_AXIS_CONFLICTS = new Set(["type", "brand", "model", "mpn", "condition", "features", "feature", "country", "material"]);
+
+function safeVariationAxes(draft: any, sample: DraftVariant, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
+  const seen = new Set<string>();
+  const catalogLower = new Map(Object.keys(catalog || {}).map((name) => [name.toLowerCase(), catalog[name]]));
+  return variantAxes(draft, sample).map((raw, i) => {
+    const axis = cleanText(raw) || `Option ${i + 1}`;
+    const lower = axis.toLowerCase();
+    const conflictsWithRequiredSpecific = ITEM_SPECIFIC_AXIS_CONFLICTS.has(lower) || !!catalogLower.get(lower)?.required;
+    let safe = conflictsWithRequiredSpecific ? (/colou?r/i.test(axis) ? "Color" : /size/i.test(axis) ? "Size" : i === 0 ? "Style" : `Option ${i + 1}`) : axis;
+    while (seen.has(safe.toLowerCase())) safe = `${safe} ${i + 1}`;
+    seen.add(safe.toLowerCase());
+    return safe.slice(0, 40);
+  });
+}
+
+function uniqueVariationOptions(variants: DraftVariant[], axes: string[]) {
+  const seenCombos = new Set<string>();
+  return variants.map((variant, index) => {
+    const raw = variantOptions(variant, axes);
+    const options: Record<string, string> = {};
+    for (const axis of axes) {
+      const value = shortenAspectValue(axis, raw[axis] || variant.variantKey || variant.variantNameEn || variant.variantSku || `Option ${index + 1}`);
+      options[axis] = value || `Option ${index + 1}`;
+    }
+    let combo = axes.map((axis) => options[axis].toLowerCase()).join("|");
+    if (seenCombos.has(combo)) {
+      const suffix = cleanText(variant.vid || variant.variantSku || index + 1).replace(/[^A-Za-z0-9]/g, "").slice(-6) || String(index + 1);
+      options[axes[0]] = shortenAspectValue(axes[0], `${options[axes[0]]} ${suffix}`) || options[axes[0]];
+      combo = axes.map((axis) => options[axis].toLowerCase()).join("|");
+    }
+    seenCombos.add(combo);
+    return options;
+  });
 }
 
 function variantOptions(variant: DraftVariant, axes: string[]) {
@@ -477,19 +534,20 @@ async function createOrUpdateOffer(accessToken: string, offerBody: any) {
 }
 
 async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[], aspectCatalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
-  const axes = variantAxes(draft, variants[0]);
+  const axes = safeVariationAxes(draft, variants[0], aspectCatalog);
+  const optionsByVariant = uniqueVariationOptions(variants, axes);
   const groupKey = `${draft.sku || draft.cj_product_id}-grp`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 50);
   const baseImages = normalizeImageUrls(draft.images);
   const allImages = normalizeImageUrls(baseImages, variants.map((v) => v.variantImage || v.image));
   if (allImages.length === 0) throw new Error("eBay requires at least one valid http(s) image URL before publishing variants.");
   const variantSKUs: string[] = [];
-  const specifications = axes.map((axis) => ({ name: axis, values: Array.from(new Set(variants.map((v) => variantOptions(v, axes)[axis]).filter(Boolean))) }));
+  const specifications = axes.map((axis) => ({ name: axis, values: Array.from(new Set(optionsByVariant.map((options) => options[axis]).filter(Boolean))).slice(0, 60) }));
   const imageAxis = axes.find((a) => /color|colour|style|pattern/i.test(a)) || axes[0];
 
-  for (const variant of variants) {
+  for (const [index, variant] of variants.entries()) {
     const sku = cleanText(variant.variantSku || variant.sku || variant.vid || `${draft.sku}-${variantSKUs.length + 1}`).replace(/\s+/g, "-").slice(0, 50);
     variantSKUs.push(sku);
-    const optionAspects = variantOptions(variant, axes);
+    const optionAspects = optionsByVariant[index];
     const imageUrls = normalizeImageUrls(variant.variantImage, variant.image, baseImages, allImages);
     const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, optionAspects, axes), aspectCatalog);
     // ensure variation-axis values are present per-variant even if catalog excluded them
@@ -512,7 +570,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   const groupBody = {
     title: safeTitle(draft.title, draft.sku),
     description: safeDescription(draft),
-    aspects: filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog),
+    aspects: filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog, axes),
     imageUrls: allImages,
     variantSKUs,
     variesBy: { aspectsImageVariesBy: imageAxis ? [imageAxis] : undefined, specifications },

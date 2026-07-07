@@ -17,6 +17,111 @@ function fallbackRewrite(title: string) {
   return (parts[0] || cleaned || title).slice(0, 80);
 }
 
+function compactText(value: unknown, fallback = "") {
+  const text = String(value ?? "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/\s+/g, " ").trim();
+  if (text) return text;
+  return String(fallback ?? "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/\s+/g, " ").trim();
+}
+
+function cleanImages(...inputs: unknown[]) {
+  const out: string[] = [];
+  const walk = (input: unknown) => {
+    if (!input) return;
+    if (Array.isArray(input)) return input.forEach(walk);
+    const text = String(input).trim().replace(/\\\//g, "/").replace(/&amp;/gi, "&");
+    if (!text) return;
+    if ((text.startsWith("[") && text.endsWith("]")) || (text.startsWith('"') && text.endsWith('"'))) {
+      try { return walk(JSON.parse(text)); } catch { /* keep scanning */ }
+    }
+    for (const match of text.match(/https?:\/\/[^\s"'\\\])>,]+/gi) || []) {
+      try { const url = new URL(match); if (url.hostname.includes(".")) out.push(url.toString()); } catch { /* skip */ }
+    }
+  };
+  inputs.forEach(walk);
+  return Array.from(new Set(out)).slice(0, 12);
+}
+
+function inferType(title: string, detail: any, draft: any) {
+  const direct = compactText(draft?.item_specifics?.Type || detail?.categoryName || detail?.productCategoryName || detail?.productType);
+  if (direct) return direct.slice(0, 65);
+  return compactText(title).split(/\s+/).filter((w) => w.length > 2).slice(0, 4).join(" ").slice(0, 65) || "General Product";
+}
+
+function repairVariants(detail: any, draft: any, images: string[]) {
+  const variants = detail?.variants || detail?.variantList || detail?.productVariants || draft?.profit?.variant_group?.variants || [];
+  if (!Array.isArray(variants) || variants.length <= 1) return null;
+  const productKey = compactText(detail?.productKeyEn || draft?.profit?.product_key);
+  const axes = productKey ? productKey.split(/[-,/|>]+/).map((v) => compactText(v)).filter(Boolean) : [];
+  const safeAxes = axes.length ? axes.map((a, i) => (/^type$/i.test(a) ? (i === 0 ? "Style" : `Option ${i + 1}`) : a)) : undefined;
+  return {
+    variants: variants.map((v: any, i: number) => ({
+      vid: v.vid,
+      variantSku: v.variantSku || v.sku || v.vid || `${draft.sku}-${i + 1}`,
+      variantKey: compactText(v.variantKey || v.variantNameEn || v.variantSku || v.vid || `Option ${i + 1}`),
+      variantNameEn: v.variantNameEn,
+      variantImage: cleanImages(v.variantImage, v.image, images)[0] || images[0] || null,
+      variantSellPrice: Number(v.variantSellPrice ?? v.price ?? draft.price ?? 0),
+      price: Number(v.price ?? v.variantSellPrice ?? draft.price ?? 0),
+      inventory: Number(v.inventory || v.quantity || draft.quantity || 1),
+    })),
+    axes: safeAxes,
+    productKey,
+  };
+}
+
+async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
+  const { cjProductDetail, getUserCjToken } = await import("./cj.server");
+  const token = await getUserCjToken(context.supabase, context.userId);
+  const detail: any = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", token);
+  const title = compactText(detail?.productNameEn, draft.title).slice(0, 80) || draft.title;
+  const description = compactText(detail?.description, draft.description || `${title}. New item. Review photos and selected option before checkout.`);
+  const images = cleanImages(draft.images, detail?.productImageSet, detail?.productImages, detail?.bigImage, detail?.productImage);
+  const variants = repairVariants(detail, draft, images);
+  const itemSpecifics = {
+    ...(draft.item_specifics || {}),
+    Brand: compactText(draft.brand || draft.item_specifics?.Brand || detail?.brand, "Unbranded"),
+    Type: compactText(draft.item_specifics?.Type, inferType(title, detail, draft)),
+    Model: compactText(draft.model || draft.item_specifics?.Model, "Does Not Apply"),
+    MPN: compactText(draft.item_specifics?.MPN, "Does Not Apply"),
+  };
+  const repaired = {
+    ...draft,
+    title,
+    description,
+    images,
+    item_specifics: itemSpecifics,
+    brand: itemSpecifics.Brand,
+    model: itemSpecifics.Model,
+    status: "pending" as const,
+    audit_reason: `Auto-repaired CJ data after eBay error: ${reason.slice(0, 180)}`,
+    profit: {
+      ...(draft.profit || {}),
+      start_country: (draft.profit?.start_country || detail?.countryCode || detail?.countryFrom || detail?.sourceFrom || "CN").toString().toUpperCase().slice(0, 2),
+      product_key: variants?.productKey || draft.profit?.product_key || null,
+      variant_axes: variants?.axes || draft.profit?.variant_axes || null,
+      variant_group: variants ? { variants: variants.variants } : draft.profit?.variant_group || null,
+      cj_repair_cached_at: new Date().toISOString(),
+    },
+  };
+  await context.supabase.from("listing_drafts").update({
+    title: repaired.title,
+    description: repaired.description,
+    images: repaired.images,
+    item_specifics: repaired.item_specifics,
+    brand: repaired.brand,
+    model: repaired.model,
+    status: repaired.status,
+    audit_reason: repaired.audit_reason,
+    profit: repaired.profit,
+  }).eq("id", draft.id);
+  await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "info", category: "ebay", message: `Auto-repaired draft from CJ: ${title}`, metadata: { draftId: draft.id, reason, variants: variants?.variants?.length || 0 } });
+  return repaired;
+}
+
+function shouldAutoRepair(message: string) {
+  return /variation|specific|type\s+is\s+missing|invalid data|imageUrl|country|location|mpn|gtin|upc/i.test(message);
+}
+
 export const getEbayConnectUrl = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }: any) => ebayConsentUrl(context.userId));
@@ -129,7 +234,15 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
             await context.supabase.from("listing_drafts").update({ profit: workingDraft.profit }).eq("id", draft.id);
           } catch { /* fall back to CN default in publish */ }
         }
-        const pushed = await publishInventoryItem(token, workingDraft);
+        let pushed: any;
+        try {
+          pushed = await publishInventoryItem(token, workingDraft);
+        } catch (firstError) {
+          const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
+          if (!draft.cj_product_id || !shouldAutoRepair(firstMessage)) throw firstError;
+          workingDraft = await autoRepairDraftFromCj(context, workingDraft, firstMessage);
+          pushed = await publishInventoryItem(token, workingDraft);
+        }
         await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: draft.sku, title: draft.title, price: draft.price, cj_product_id: draft.cj_product_id, status: "active", cj_landed_cost: Number((draft.profit || {}).item_cost || 0) + Number((draft.profit || {}).shipping || 0) });
         // Auto-remove pushed draft from queue.
         await context.supabase.from("listing_drafts").delete().eq("id", draft.id);

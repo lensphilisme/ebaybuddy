@@ -10,15 +10,13 @@ import {
   Sliders,
   LogOut,
   Bell,
-  Menu,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { BrandLogo } from "./brand-logo";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 
 const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -67,7 +65,6 @@ export function AppShell({ children, title, subtitle, actions }: {
   const router = useRouter();
   const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const [mobileOpen, setMobileOpen] = useState(false);
 
   async function signOut() {
     await queryClient.cancelQueries();
@@ -94,24 +91,6 @@ export function AppShell({ children, title, subtitle, actions }: {
       {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
         <header className="h-16 border-b border-border bg-card/80 backdrop-blur sticky top-0 z-30 flex items-center px-4 lg:px-8 gap-3">
-          <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-            <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="lg:hidden" aria-label="Open menu">
-                <Menu className="h-5 w-5" />
-              </Button>
-            </SheetTrigger>
-            <SheetContent side="left" className="w-64 p-0 bg-sidebar flex flex-col">
-              <div className="h-16 flex items-center px-6 border-b border-sidebar-border">
-                <BrandLogo />
-              </div>
-              <NavList pathname={pathname} onNavigate={() => setMobileOpen(false)} />
-              <div className="p-3 border-t border-sidebar-border">
-                <Button variant="ghost" size="sm" className="w-full justify-start gap-2" onClick={signOut}>
-                  <LogOut className="h-4 w-4" /> Sign out
-                </Button>
-              </div>
-            </SheetContent>
-          </Sheet>
           <Link to="/dashboard" className="lg:hidden"><BrandLogo size="sm" /></Link>
           <div className="hidden md:block flex-1 min-w-0">
             <h1 className="text-lg font-semibold leading-none truncate">{title}</h1>
@@ -124,7 +103,7 @@ export function AppShell({ children, title, subtitle, actions }: {
             </Button>
           </div>
         </header>
-        <main className="flex-1 p-4 lg:p-8 max-w-[1400px] w-full mx-auto">
+        <main className="flex-1 p-4 pb-24 lg:p-8 max-w-[1400px] w-full mx-auto">
           <div className="md:hidden mb-6">
             <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
             {subtitle && <p className="text-sm text-muted-foreground mt-1">{subtitle}</p>}
@@ -132,6 +111,18 @@ export function AppShell({ children, title, subtitle, actions }: {
           {children}
         </main>
       </div>
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex gap-1 overflow-x-auto border-t border-border bg-card/95 px-1 py-1.5 shadow-[var(--shadow-elevated)] backdrop-blur lg:hidden">
+        {NAV.map((item) => {
+          const active = pathname.startsWith(item.to);
+          const Icon = item.icon;
+          return (
+            <Link key={item.to} to={item.to} className={cn("flex min-w-[68px] flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[10px] font-semibold transition", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}>
+              <Icon className="h-4 w-4" />
+              <span className="truncate">{item.label.replace("CJ ", "")}</span>
+            </Link>
+          );
+        })}
+      </nav>
     </div>
   );
 }
