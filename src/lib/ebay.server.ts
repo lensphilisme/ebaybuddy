@@ -380,13 +380,15 @@ export async function getItemAspectsForCategory(accessToken: string, categoryId:
   } catch { return {}; }
 }
 
-function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
+function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>, excludeNames: string[] = []) {
   if (!Object.keys(catalog).length) return aspects;
+  const excluded = new Set(excludeNames.map((name) => cleanText(name).toLowerCase()).filter(Boolean));
   const nameByLower: Record<string, string> = {};
   for (const k of Object.keys(catalog)) nameByLower[k.toLowerCase()] = k;
   const out: Record<string, string[]> = {};
   for (const [name, values] of Object.entries(aspects)) {
     const canonical = nameByLower[name.toLowerCase()] || name;
+    if (excluded.has(canonical.toLowerCase())) continue;
     const spec = catalog[canonical];
     if (!spec && !/^(brand|condition|mpn|model|type|features)$/i.test(canonical)) continue;
     const maxLen = spec?.maxLen ?? 65;
@@ -402,6 +404,7 @@ function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Rec
     if (cleanValues.length) out[canonical] = Array.from(new Set(cleanValues));
   }
   for (const [name, spec] of Object.entries(catalog)) {
+    if (excluded.has(name.toLowerCase())) continue;
     if (!spec.required || out[name]) continue;
     if (spec.allowed?.includes("Does Not Apply")) out[name] = ["Does Not Apply"];
     else if (spec.allowed?.length) out[name] = [spec.allowed[0]];
@@ -565,7 +568,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   const groupBody = {
     title: safeTitle(draft.title, draft.sku),
     description: safeDescription(draft),
-    aspects: filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog),
+    aspects: filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog, axes),
     imageUrls: allImages,
     variantSKUs,
     variesBy: { aspectsImageVariesBy: imageAxis ? [imageAxis] : undefined, specifications },
