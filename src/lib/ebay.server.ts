@@ -268,6 +268,28 @@ function shortenAspectValue(name: string, value: unknown) {
   return cut || text.slice(0, 65).trim();
 }
 
+const LISTING_LOCATION_ASPECT_NAMES = new Set([
+  "item location",
+  "location",
+  "inventory location",
+  "merchant location",
+  "merchantlocationkey",
+  "warehouse",
+  "warehouse location",
+  "ship from",
+  "ships from",
+  "shipping location",
+  "postal code",
+  "zip code",
+  "city",
+  "state",
+  "state or province",
+]);
+
+function isListingLocationAspect(name: string) {
+  return LISTING_LOCATION_ASPECT_NAMES.has(cleanText(name).toLowerCase().replace(/[_-]+/g, " "));
+}
+
 function normalizeAspects(input: any, draft: any, extra: Record<string, unknown> = {}, excludeNames: string[] = []) {
   const extraKeys = new Set(Object.keys(extra || {}).map((k) => cleanText(k).toLowerCase()));
   const excluded = new Set(excludeNames.map((k) => cleanText(k).toLowerCase()).filter(Boolean));
@@ -282,7 +304,7 @@ function normalizeAspects(input: any, draft: any, extra: Record<string, unknown>
   const aspects: Record<string, string[]> = {};
   for (const [key, value] of Object.entries(raw)) {
     const name = cleanText(key);
-    if (!name || /^country$/i.test(name)) continue;
+    if (!name || /^country$/i.test(name) || isListingLocationAspect(name)) continue;
     if (excluded.has(name.toLowerCase()) && !extraKeys.has(name.toLowerCase())) continue;
     const values = (Array.isArray(value) ? value : [value])
       .map((v) => shortenAspectValue(name, v))
@@ -291,6 +313,43 @@ function normalizeAspects(input: any, draft: any, extra: Record<string, unknown>
     if (values.length) aspects[name] = Array.from(new Set(values));
   }
   return aspects;
+}
+
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    const text = cleanText(value);
+    if (text) return text;
+  }
+  return "";
+}
+
+function normalizeCountry(value: unknown, fallback = "CN") {
+  return (cleanText(value, fallback).toUpperCase().match(/[A-Z]{2}/)?.[0] || fallback).slice(0, 2);
+}
+
+function cjWarehouseFromDraft(draft: any) {
+  const profit = draft?.profit || {};
+  const candidates = [
+    profit.cj_warehouse,
+    profit.warehouse,
+    profit.inventory_location,
+    profit.item_location,
+    draft?.cj_warehouse,
+    draft?.warehouse,
+  ].filter(Boolean);
+  const merged = Object.assign({}, ...candidates.filter((c) => typeof c === "object" && !Array.isArray(c)));
+  const country = normalizeCountry(
+    merged.countryCode || merged.country || merged.country_code || profit.start_country || profit.warehouse_country || profit.countryFrom || draft?.countryCode || draft?.countryFrom,
+    "CN",
+  );
+  return {
+    country,
+    city: firstText(merged.city, merged.cityName, merged.cityEn, profit.warehouse_city),
+    stateOrProvince: firstText(merged.stateOrProvince, merged.state, merged.province, merged.provinceName, profit.warehouse_state),
+    postalCode: firstText(merged.postalCode, merged.zipCode, merged.zip, profit.warehouse_postal_code),
+    name: firstText(merged.nameEn, merged.name, merged.areaEn, merged.valueEn, profit.warehouse_name),
+    raw: merged,
+  };
 }
 
 function inferProductType(draft: any) {
@@ -313,9 +372,10 @@ function priceNumber(value: unknown) {
 }
 
 function locationForDraft(draft: any) {
-  const country = cleanText(draft?.profit?.start_country || draft?.profit?.warehouse_country || draft?.profit?.countryFrom || "CN").toUpperCase().slice(0, 2) || "CN";
+  const warehouse = cjWarehouseFromDraft(draft);
+  const country = warehouse.country;
   const cfg: Record<string, { postal: string; city: string; state?: string }> = {
-    US: { postal: "90001", city: "Los Angeles", state: "CA" },
+    US: { postal: "32256", city: "Jacksonville", state: "FL" },
     CN: { postal: "518000", city: "Shenzhen", state: "GD" },
     GB: { postal: "SW1A 1AA", city: "London" },
     CA: { postal: "M5H 2N2", city: "Toronto", state: "ON" },
@@ -324,14 +384,18 @@ function locationForDraft(draft: any) {
     FR: { postal: "75001", city: "Paris" },
   };
   const c = cfg[country] || cfg.CN;
-  return { key: `droplist_${country.toLowerCase()}`.slice(0, 36), country, postalCode: c.postal, city: c.city, stateOrProvince: c.state };
+  const city = warehouse.city || c.city;
+  const stateOrProvince = warehouse.stateOrProvince || c.state;
+  const postalCode = warehouse.postalCode || c.postal;
+  const keyParts = ["droplist", country, city, stateOrProvince].filter(Boolean).join("_").toLowerCase().replace(/[^a-z0-9_-]+/g, "_");
+  return { key: keyParts.slice(0, 36), country, postalCode, city, stateOrProvince, name: warehouse.name || `CJ ${country} fulfillment` };
 }
 
 async function ensureInventoryLocation(accessToken: string, draft: any) {
   const loc = locationForDraft(draft);
   const body = {
     location: { address: stripEmpty({ country: loc.country, postalCode: loc.postalCode, city: loc.city, stateOrProvince: loc.stateOrProvince }) },
-    name: `DropList ${loc.country} fulfillment`,
+    name: loc.name,
     merchantLocationStatus: "ENABLED",
     locationTypes: ["WAREHOUSE"],
   };
@@ -358,13 +422,13 @@ export async function getItemAspectsForCategory(accessToken: string, categoryId:
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const tree = await treeRes.json();
-    if (!treeRes.ok) return {} as Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>;
+    if (!treeRes.ok) return {} as Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }>;
     const res = await fetch(`${EBAY_API_BASE}/commerce/taxonomy/v1/category_tree/${tree.categoryTreeId}/get_item_aspects_for_category?category_id=${encodeURIComponent(categoryId)}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const json = await res.json();
     if (!res.ok) return {};
-    const out: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }> = {};
+    const out: Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }> = {};
     for (const a of json.aspects || []) {
       const name = String(a?.localizedAspectName || "").trim();
       if (!name) continue;
@@ -374,13 +438,16 @@ export async function getItemAspectsForCategory(accessToken: string, categoryId:
         required: !!c.aspectRequired,
         allowed: c.aspectMode === "SELECTION_ONLY" && values.length ? values : undefined,
         maxLen: Number(c.aspectMaxLength || 65) || 65,
+        applicableTo: Array.isArray(c.aspectApplicableTo) ? c.aspectApplicableTo : undefined,
+        usage: c.aspectUsage,
+        cardinality: c.itemToAspectCardinality,
       };
     }
     return out;
   } catch { return {}; }
 }
 
-function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>, excludeNames: string[] = []) {
+function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }>, excludeNames: string[] = []) {
   const excluded = new Set(excludeNames.map((name) => cleanText(name).toLowerCase()).filter(Boolean));
   if (!Object.keys(catalog).length) {
     return Object.fromEntries(Object.entries(aspects).filter(([name]) => !excluded.has(cleanText(name).toLowerCase())));
@@ -392,12 +459,15 @@ function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Rec
     const canonical = nameByLower[name.toLowerCase()] || name;
     if (excluded.has(canonical.toLowerCase())) continue;
     const spec = catalog[canonical];
+    if (spec?.applicableTo?.includes("PRODUCT") && !spec.applicableTo.includes("ITEM")) continue;
     if (!spec && !/^(brand|condition|mpn|model|type|features)$/i.test(canonical)) continue;
     const maxLen = spec?.maxLen ?? 65;
     let cleanValues = values
       .map((v) => String(v).replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, "").trim())
       .filter(Boolean)
       .map((v) => v.slice(0, maxLen));
+    if (spec?.cardinality !== "MULTI") cleanValues = cleanValues.slice(0, 1);
+    else cleanValues = cleanValues.slice(0, 30);
     if (spec?.allowed?.length) {
       const allowedLower = new Map(spec.allowed.map((v) => [v.toLowerCase(), v]));
       cleanValues = cleanValues.map((v) => allowedLower.get(v.toLowerCase()) || "").filter(Boolean);
@@ -407,6 +477,7 @@ function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Rec
   }
   for (const [name, spec] of Object.entries(catalog)) {
     if (excluded.has(name.toLowerCase())) continue;
+    if (spec.applicableTo?.includes("PRODUCT") && !spec.applicableTo.includes("ITEM")) continue;
     if (!spec.required || out[name]) continue;
     if (spec.allowed?.includes("Does Not Apply")) out[name] = ["Does Not Apply"];
     else if (spec.allowed?.length) out[name] = [spec.allowed[0]];
