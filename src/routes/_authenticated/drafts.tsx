@@ -3,7 +3,7 @@ import { AppShell } from "@/components/app-shell";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { optimizeDraftWithAi, repairDraftForEbay } from "@/lib/ai.functions";
+import { optimizeDraftCopyWithAi, optimizeDraftWithAi, repairDraftForEbay } from "@/lib/ai.functions";
 import { aiDeepCategorySuggest, pushDraftsToEbay, suggestEbayCategories } from "@/lib/ebay.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +43,7 @@ function DraftsPage() {
   const [suggestions, setSuggestions] = useState<Record<string, any[]>>({});
   const [editDraft, setEditDraft] = useState<any | null>(null);
   const optimizeFn = useServerFn(optimizeDraftWithAi);
+  const optimizeCopyFn = useServerFn(optimizeDraftCopyWithAi);
   const repairFn = useServerFn(repairDraftForEbay);
   const suggestFn = useServerFn(suggestEbayCategories);
   const pushFn = useServerFn(pushDraftsToEbay);
@@ -61,7 +62,13 @@ function DraftsPage() {
 
   const optimize = useMutation({
     mutationFn: async (ids: string[]) => { for (const id of ids) await optimizeFn({ data: { draftId: id } }); },
-    onSuccess: () => { toast.success("AI item specifics filled"); refetch(); },
+    onSuccess: () => { toast.success("AI Fill completed item specifics"); refetch(); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const optimizeCopy = useMutation({
+    mutationFn: async (ids: string[]) => { for (const id of ids) await optimizeCopyFn({ data: { draftId: id } }); },
+    onSuccess: () => { toast.success("AI Optimized updated listing copy"); refetch(); },
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -112,7 +119,8 @@ function DraftsPage() {
     <AppShell title="Drafts" subtitle="Compact queue for fixing, editing and bulk-pushing to eBay">
       <div className="mb-3 flex flex-wrap gap-2">
         <Button asChild variant="outline" size="sm"><Link to="/products"><Search className="h-4 w-4 mr-1" />Research</Link></Button>
-        <Button size="sm" disabled={!selectedIds.length || optimize.isPending} onClick={() => optimize.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />Optimize</Button>
+        <Button size="sm" disabled={!selectedIds.length || optimize.isPending} onClick={() => optimize.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Fill</Button>
+        <Button size="sm" disabled={!selectedIds.length || optimizeCopy.isPending} variant="outline" onClick={() => optimizeCopy.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Optimized</Button>
         <Button size="sm" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)}><Wrench className="h-4 w-4 mr-1" />Repair</Button>
         <Button size="sm" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => repair.mutate(failedIds)}><Wrench className="h-4 w-4 mr-1" />Repair failed</Button>
         <Button size="sm" disabled={!selectedIds.length || push.isPending} onClick={() => push.mutate(selectedIds)}><Rocket className="h-4 w-4 mr-1" />Push</Button>
@@ -152,7 +160,8 @@ function DraftsPage() {
                           <DropdownMenuItem onClick={() => setEditDraft(d)}>Edit draft</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => aiSuggest.mutate(d)}>AI pick category</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => suggest.mutate(d)}>eBay category suggest</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => optimize.mutate([d.id])}>AI fill specifics</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => optimize.mutate([d.id])}>AI Fill item specifics</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => optimizeCopy.mutate([d.id])}>AI Optimized copy</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => repair.mutate([d.id])}>Repair for eBay</DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem onClick={() => push.mutate([d.id])}>Push to eBay</DropdownMenuItem>
