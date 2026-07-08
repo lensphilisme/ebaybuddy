@@ -80,8 +80,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "twitter:card", content: "summary" },
       { name: "twitter:title", content: "DropList — Bulk-list CJ Dropshipping products to eBay" },
       { name: "twitter:description", content: "Find winning CJ Dropshipping products, build optimized eBay drafts, and bulk-push to your eBay account with smart pricing and market research." },
-      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/ea2d0778-5c14-429e-91eb-3c8dd2bd5c3b/id-preview-7dc246ce--536c1905-1fb5-456e-bb42-670749d9fc19.lovable.app-1783318940224.png" },
-      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/ea2d0778-5c14-429e-91eb-3c8dd2bd5c3b/id-preview-7dc246ce--536c1905-1fb5-456e-bb42-670749d9fc19.lovable.app-1783318940224.png" },
     ],
     links: [
       { rel: "stylesheet", href: appCss },
