@@ -41,6 +41,24 @@ function cleanImages(...inputs: unknown[]) {
   return Array.from(new Set(out)).slice(0, 12);
 }
 
+function compactCountry(value: unknown, fallback = "CN") {
+  return (compactText(value, fallback).toUpperCase().match(/[A-Z]{2}/)?.[0] || fallback).slice(0, 2);
+}
+
+async function resolveCjWarehouse(context: any, startCountry: string) {
+  try {
+    const { cjGetWarehouses, getUserCjToken } = await import("./cj.server");
+    const token = await getUserCjToken(context.supabase, context.userId);
+    const warehouses = await cjGetWarehouses(token);
+    const country = compactCountry(startCountry);
+    return warehouses.find((w: any) => compactCountry(w.countryCode || w.country) === country && !w.disabled)
+      || warehouses.find((w: any) => compactCountry(w.countryCode || w.country) === country)
+      || null;
+  } catch {
+    return null;
+  }
+}
+
 function inferType(title: string, detail: any, draft: any) {
   const direct = compactText(draft?.item_specifics?.Type || detail?.categoryName || detail?.productCategoryName || detail?.productType);
   if (direct) return direct.slice(0, 65);
@@ -73,6 +91,8 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
   const { cjProductDetail, getUserCjToken } = await import("./cj.server");
   const token = await getUserCjToken(context.supabase, context.userId);
   const detail: any = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", token);
+  const startCountry = compactCountry(draft.profit?.start_country || detail?.countryCode || detail?.countryFrom || detail?.sourceFrom, "CN");
+  const warehouse = await resolveCjWarehouse(context, startCountry);
   const title = compactText(detail?.productNameEn, draft.title).slice(0, 80) || draft.title;
   const description = compactText(detail?.description, draft.description || `${title}. New item. Review photos and selected option before checkout.`);
   const images = cleanImages(draft.images, detail?.productImageSet, detail?.productImages, detail?.bigImage, detail?.productImage);
@@ -96,7 +116,8 @@ async function autoRepairDraftFromCj(context: any, draft: any, reason: string) {
     audit_reason: `Auto-repaired CJ data after eBay error: ${reason.slice(0, 180)}`,
     profit: {
       ...(draft.profit || {}),
-      start_country: (draft.profit?.start_country || detail?.countryCode || detail?.countryFrom || detail?.sourceFrom || "CN").toString().toUpperCase().slice(0, 2),
+      start_country: startCountry,
+      cj_warehouse: warehouse || draft.profit?.cj_warehouse || null,
       product_key: variants?.productKey || draft.profit?.product_key || null,
       variant_axes: variants?.axes || draft.profit?.variant_axes || null,
       variant_group: variants ? { variants: variants.variants } : draft.profit?.variant_group || null,
@@ -229,10 +250,17 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
             const { cjProductDetail, getUserCjToken } = await import("./cj.server");
             const cjToken = await getUserCjToken(context.supabase, context.userId);
             const detail: any = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", cjToken);
-            const startCountry = (detail?.countryCode || detail?.countryFrom || detail?.sourceFrom || "CN").toString().toUpperCase().slice(0, 2);
-            workingDraft = { ...draft, profit: { ...(draft.profit || {}), start_country: startCountry } };
+            const startCountry = compactCountry(detail?.countryCode || detail?.countryFrom || detail?.sourceFrom, "CN");
+            const warehouse = await resolveCjWarehouse(context, startCountry);
+            workingDraft = { ...draft, profit: { ...(draft.profit || {}), start_country: startCountry, cj_warehouse: warehouse || draft.profit?.cj_warehouse || null } };
             await context.supabase.from("listing_drafts").update({ profit: workingDraft.profit }).eq("id", draft.id);
           } catch { /* fall back to CN default in publish */ }
+        } else if (!draft.profit?.cj_warehouse) {
+          const warehouse = await resolveCjWarehouse(context, draft.profit.start_country);
+          if (warehouse) {
+            workingDraft = { ...draft, profit: { ...(draft.profit || {}), cj_warehouse: warehouse } };
+            await context.supabase.from("listing_drafts").update({ profit: workingDraft.profit }).eq("id", draft.id);
+          }
         }
         let pushed: any;
         try {
@@ -278,7 +306,7 @@ export const aiDeepCategorySuggest = createServerFn({ method: "POST" })
       try {
         const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
-          headers: { Authorization: `Bearer ${process.env.LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+          headers: { "Lovable-API-Key": process.env.LOVABLE_API_KEY, "Content-Type": "application/json" },
           body: JSON.stringify({
             model: "google/gemini-3-flash-preview",
             response_format: { type: "json_object" },
@@ -338,7 +366,7 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
           try {
             const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
               method: "POST",
-              headers: { Authorization: `Bearer ${process.env.LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+              headers: { "Lovable-API-Key": process.env.LOVABLE_API_KEY, "Content-Type": "application/json" },
               body: JSON.stringify({
                 model: "google/gemini-3-flash-preview",
                 messages: [
