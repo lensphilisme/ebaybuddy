@@ -1,3 +1,4 @@
+// @ts-nocheck -- run with `bun test`
 import { describe, expect, test, beforeEach } from "bun:test";
 import { ebayFetch, classifyEbayError, EbayAuthError, EbayRateLimitError, EbayValidationError, sanitizeUrl, singleFlight, __resetBreakers } from "./http";
 
