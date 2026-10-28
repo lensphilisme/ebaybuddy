@@ -5,8 +5,42 @@ const CJ_BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 
 type CjEnvelope<T> = { code: number; result?: boolean; success?: boolean; message: string; data: T };
 
+let refreshedCjToken: { token: string; at: number } | null = null;
+
+async function mintCjTokenFromApiKey(): Promise<string | null> {
+  const apiKey = process.env.CJ_API_KEY;
+  if (!apiKey) return null;
+  if (refreshedCjToken && Date.now() - refreshedCjToken.at < 6 * 86400000) return refreshedCjToken.token;
+  try {
+    const res = await fetch(`${CJ_BASE}/authentication/getAccessToken`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey }),
+    });
+    const json: any = await res.json();
+    const token = json?.data?.accessToken;
+    if (!token) return null;
+    refreshedCjToken = { token, at: Date.now() };
+    return token;
+  } catch {
+    return null;
+  }
+}
+
 async function cjFetch<T>(path: string, init: RequestInit = {}, overrideToken?: string): Promise<T> {
-  const token = overrideToken || process.env.CJ_ACCESS_TOKEN;
+  try {
+    return await cjFetchOnce<T>(path, init, overrideToken);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/1600001|not configured|Invalid API key|access token/i.test(msg)) throw e;
+    const fresh = await mintCjTokenFromApiKey();
+    if (!fresh) throw e;
+    return cjFetchOnce<T>(path, init, fresh);
+  }
+}
+
+async function cjFetchOnce<T>(path: string, init: RequestInit = {}, overrideToken?: string): Promise<T> {
+  const token = overrideToken || refreshedCjToken?.token || process.env.CJ_ACCESS_TOKEN;
   if (!token) throw new Error("CJ access token is not configured. Add it under Settings → CJ Dropshipping.");
   const res = await fetch(`${CJ_BASE}${path}`, {
     ...init,
