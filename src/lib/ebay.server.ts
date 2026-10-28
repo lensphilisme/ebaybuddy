@@ -1,3 +1,5 @@
+import { ebayFetch, singleFlight } from "./ebay/http";
+const fetch = ebayFetch;
 const EBAY_API_BASE = process.env.EBAY_API_BASE || "https://api.ebay.com";
 const EBAY_TRADING_ENDPOINT = "https://api.ebay.com/ws/api.dll";
 
@@ -84,8 +86,12 @@ export async function getUserEbayCredential(supabase: any, userId: string): Prom
 }
 
 export async function getFreshEbayToken(supabase: any, userId: string) {
+  return singleFlight(`ebay-token:${userId}`, () => getFreshEbayTokenInner(supabase, userId));
+}
+
+async function getFreshEbayTokenInner(supabase: any, userId: string) {
   const creds = await getUserEbayCredential(supabase, userId);
-  if (creds.access_token && creds.expires_at && creds.expires_at > Date.now()) return creds.access_token;
+  if (creds.access_token && creds.expires_at && creds.expires_at > Date.now() + 60_000) return creds.access_token;
   const fresh = await refreshEbayAccessToken(creds.refresh_token!);
   const row = {
     user_id: userId,
