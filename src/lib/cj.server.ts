@@ -1,47 +1,18 @@
 // Server-only CJ Dropshipping Open API client.
 // Docs: https://developers.cjdropshipping.com/en/api/
+import { resolveUserCjToken } from "./cj-auth.server";
 
 const CJ_BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 
 type CjEnvelope<T> = { code: number; result?: boolean; success?: boolean; message: string; data: T };
 
-let refreshedCjToken: { token: string; at: number } | null = null;
-
-async function mintCjTokenFromApiKey(): Promise<string | null> {
-  const apiKey = process.env.CJ_API_KEY;
-  if (!apiKey) return null;
-  if (refreshedCjToken && Date.now() - refreshedCjToken.at < 6 * 86400000) return refreshedCjToken.token;
-  try {
-    const res = await fetch(`${CJ_BASE}/authentication/getAccessToken`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKey }),
-    });
-    const json: any = await res.json();
-    const token = json?.data?.accessToken;
-    if (!token) return null;
-    refreshedCjToken = { token, at: Date.now() };
-    return token;
-  } catch {
-    return null;
-  }
-}
-
 async function cjFetch<T>(path: string, init: RequestInit = {}, overrideToken?: string): Promise<T> {
-  try {
-    return await cjFetchOnce<T>(path, init, overrideToken);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (!/1600001|not configured|Invalid API key|access token/i.test(msg)) throw e;
-    const fresh = await mintCjTokenFromApiKey();
-    if (!fresh) throw e;
-    return cjFetchOnce<T>(path, init, fresh);
-  }
+  return cjFetchOnce<T>(path, init, overrideToken);
 }
 
 async function cjFetchOnce<T>(path: string, init: RequestInit = {}, overrideToken?: string): Promise<T> {
-  const token = overrideToken || refreshedCjToken?.token || process.env.CJ_ACCESS_TOKEN;
-  if (!token) throw new Error("CJ access token is not configured. Add it under Settings → CJ Dropshipping.");
+  const token = overrideToken;
+  if (!token) throw new Error("CJ is not connected. Add your API key in Settings → CJ Dropshipping.");
   const res = await fetch(`${CJ_BASE}${path}`, {
     ...init,
     headers: {
@@ -55,23 +26,17 @@ async function cjFetchOnce<T>(path: string, init: RequestInit = {}, overrideToke
   try {
     json = JSON.parse(text);
   } catch {
-    throw new Error(`CJ non-JSON response (${res.status}): ${text.slice(0, 200)}`);
+    throw new Error(`CJ returned an unreadable response (${res.status}). Please retry.`);
   }
   if (json.result === false || json.success === false || (json.code && json.code !== 200)) {
-    throw new Error(`CJ error ${json.code}: ${json.message}`);
+    if (/1600001|access token|invalid.*key/i.test(`${json.code} ${json.message}`)) throw new Error("Your CJ connection expired or was revoked. Reconnect with your API key in Settings.");
+    throw new Error(`CJ request failed (${json.code}). Please retry or check your CJ account quota.`);
   }
   return json.data;
 }
 
 export async function getUserCjToken(supabase: any, userId: string): Promise<string | undefined> {
-  const { data } = await supabase
-    .from("integration_credentials")
-    .select("credentials")
-    .eq("user_id", userId)
-    .eq("provider", "cj")
-    .eq("label", "default")
-    .maybeSingle();
-  return data?.credentials?.access_token || process.env.CJ_ACCESS_TOKEN;
+  return resolveUserCjToken(supabase, userId);
 }
 
 export type CjCategoryTree = {

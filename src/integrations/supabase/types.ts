@@ -170,6 +170,7 @@ export type Database = {
           ebay_offer_id: string | null
           ended_at: string | null
           id: string
+          image_url: string | null
           last_traffic_check: string | null
           listed_at: string
           marketplace_id: string
@@ -181,6 +182,7 @@ export type Database = {
           updated_at: string
           user_id: string
           views: number
+          watch_count: number
         }
         Insert: {
           cj_landed_cost?: number | null
@@ -193,6 +195,7 @@ export type Database = {
           ebay_offer_id?: string | null
           ended_at?: string | null
           id?: string
+          image_url?: string | null
           last_traffic_check?: string | null
           listed_at?: string
           marketplace_id?: string
@@ -204,6 +207,7 @@ export type Database = {
           updated_at?: string
           user_id: string
           views?: number
+          watch_count?: number
         }
         Update: {
           cj_landed_cost?: number | null
@@ -216,6 +220,7 @@ export type Database = {
           ebay_offer_id?: string | null
           ended_at?: string | null
           id?: string
+          image_url?: string | null
           last_traffic_check?: string | null
           listed_at?: string
           marketplace_id?: string
@@ -227,6 +232,7 @@ export type Database = {
           updated_at?: string
           user_id?: string
           views?: number
+          watch_count?: number
         }
         Relationships: [
           {
@@ -237,6 +243,60 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      ebay_notification_receipts: {
+        Row: {
+          notification_id: string
+          processed_at: string | null
+          received_at: string
+          status: string
+          subscription_id: string
+        }
+        Insert: {
+          notification_id: string
+          processed_at?: string | null
+          received_at?: string
+          status?: string
+          subscription_id: string
+        }
+        Update: {
+          notification_id?: string
+          processed_at?: string | null
+          received_at?: string
+          status?: string
+          subscription_id?: string
+        }
+        Relationships: []
+      }
+      ebay_notification_subscriptions: {
+        Row: {
+          created_at: string
+          destination_id: string
+          id: string
+          status: string
+          subscription_id: string
+          topic_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          destination_id: string
+          id?: string
+          status?: string
+          subscription_id: string
+          topic_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          destination_id?: string
+          id?: string
+          status?: string
+          subscription_id?: string
+          topic_id?: string
+          user_id?: string
+        }
+        Relationships: []
       }
       integration_credentials: {
         Row: {
@@ -277,6 +337,30 @@ export type Database = {
           provider?: Database["public"]["Enums"]["integration_provider"]
           updated_at?: string
           user_id?: string
+        }
+        Relationships: []
+      }
+      integration_runtime: {
+        Row: {
+          key: string
+          lock_owner: string | null
+          lock_until: string | null
+          payload: Json
+          updated_at: string
+        }
+        Insert: {
+          key: string
+          lock_owner?: string | null
+          lock_until?: string | null
+          payload?: Json
+          updated_at?: string
+        }
+        Update: {
+          key?: string
+          lock_owner?: string | null
+          lock_until?: string | null
+          payload?: Json
+          updated_at?: string
         }
         Relationships: []
       }
@@ -420,6 +504,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      claim_integration_lock: {
+        Args: { p_key: string; p_owner: string }
+        Returns: boolean
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
