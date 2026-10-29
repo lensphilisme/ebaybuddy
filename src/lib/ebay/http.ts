@@ -40,11 +40,23 @@ export function isRetryableStatus(status: number) {
 
 export function backoffDelay(attempt: number, retryAfterHeader?: string | null) {
   const ra = Number(retryAfterHeader);
-  if (Number.isFinite(ra) && ra > 0) return Math.min(ra * 1000, 10_000);
+  if (Number.isFinite(ra) && ra > 0) return ra * 1000;
+  if (retryAfterHeader) {
+    const date = Date.parse(retryAfterHeader);
+    if (Number.isFinite(date)) return Math.max(0, date - Date.now());
+  }
   return Math.min(300 * 2 ** attempt, 5_000) + Math.floor(Math.random() * 100);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const queues = new Map<string, Promise<void>>();
+async function paced(key: string) {
+  const previous = queues.get(key) || Promise.resolve();
+  const next = previous.catch(() => undefined).then(() => sleep(100));
+  queues.set(key, next);
+  await next;
+  if (queues.get(key) === next) queues.delete(key);
+}
 
 export type EbayFetchOptions = { maxRetries?: number; correlationId?: string };
 
@@ -60,12 +72,14 @@ export async function ebayFetch(input: string | URL | Request, init: RequestInit
   }
   const headers = new Headers(init.headers || {});
   headers.set("X-Correlation-Id", correlationId);
+  const queueKey = `${host}:${headers.get("X-EBAY-C-MARKETPLACE-ID") || "default"}`;
   let attempt = 0;
   while (true) {
     const started = Date.now();
     let res: Response | null = null;
     let netErr: unknown = null;
     try {
+      await paced(queueKey);
       res = await fetch(url, { ...init, headers });
     } catch (e) {
       netErr = e;
@@ -83,18 +97,19 @@ export async function ebayFetch(input: string | URL | Request, init: RequestInit
       durationMs: duration,
       ebayRequestId: requestId,
       attempt,
-      error: netErr ? String(netErr) : undefined,
+      error: netErr ? "network_failure" : undefined,
     }));
     const retryable = netErr != null || isRetryableStatus(status);
     if (!retryable) {
       breaker.failures = 0;
-      return res!;
+      if (res) return res;
+      throw new EbayUnavailableError("eBay returned no response", 0, undefined, correlationId);
     }
     breaker.failures += 1;
     if (breaker.failures >= BREAKER_THRESHOLD) breaker.openUntil = Date.now() + BREAKER_COOLDOWN_MS;
     if (attempt >= maxRetries) {
       if (res) return res;
-      throw new EbayUnavailableError(`Network error calling eBay: ${String(netErr)}`, 0, undefined, correlationId);
+      throw new EbayUnavailableError("Network error calling eBay", 0, undefined, correlationId);
     }
     await sleep(backoffDelay(attempt, res?.headers.get("retry-after")));
     attempt += 1;
