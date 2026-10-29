@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { connectEbayWithCode, getEbayConnectUrl } from "@/lib/ebay.functions";
-import { saveCjToken, getIntegrationStatus } from "@/lib/cj.functions";
+import { saveCjApiKey, getIntegrationStatus } from "@/lib/cj.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { KeyRound, Boxes, Tag, ExternalLink } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -16,10 +16,10 @@ export const Route = createFileRoute("/_authenticated/settings")({ component: Se
 
 function SettingsPage() {
   const [code, setCode] = useState("");
-  const [cjToken, setCjToken] = useState("");
+  const [cjApiKey, setCjApiKey] = useState("");
   const urlFn = useServerFn(getEbayConnectUrl);
   const connectFn = useServerFn(connectEbayWithCode);
-  const cjSaveFn = useServerFn(saveCjToken);
+  const cjSaveFn = useServerFn(saveCjApiKey);
   const statusFn = useServerFn(getIntegrationStatus);
 
   const { data: status, refetch } = useQuery({
@@ -40,8 +40,8 @@ function SettingsPage() {
     onError: (e: Error) => toast.error(e.message),
   });
   const saveCj = useMutation({
-    mutationFn: () => cjSaveFn({ data: { accessToken: cjToken } }),
-    onSuccess: () => { toast.success("CJ Dropshipping token saved"); setCjToken(""); refetch(); },
+    mutationFn: () => cjSaveFn({ data: { apiKey: cjApiKey } }),
+    onSuccess: () => { toast.success("CJ API key verified and connected"); setCjApiKey(""); refetch(); },
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -51,20 +51,20 @@ function SettingsPage() {
         <IntegrationCard
           icon={Boxes}
           title="CJ Dropshipping"
-          desc="Personal access token from your CJ developer account — powers product search, freight quotes, categories and warehouses."
-          status={cjCred.is_active ? (cjCred.source === "env" ? "Connected (workspace token)" : "Connected") : "Not connected"}
+          desc="Connect your CJ account with an API key. Access tokens renew automatically."
+          status={cjCred.is_active ? (cjCred.source === "env" ? "Connected (workspace)" : "Connected") : "Not connected"}
           ready={cjCred.is_active}
         >
           <div className="space-y-2">
             <div className="flex gap-2">
-              <Input value={cjToken} onChange={(e) => setCjToken(e.target.value)} placeholder="Paste CJ access token" />
-              <Button onClick={() => saveCj.mutate()} disabled={!cjToken || saveCj.isPending}>Save</Button>
+              <Input type="password" autoComplete="off" aria-label="CJ API key" value={cjApiKey} onChange={(e) => setCjApiKey(e.target.value)} placeholder="CJ API key" />
+              <Button onClick={() => saveCj.mutate()} disabled={!cjApiKey.trim() || saveCj.isPending}>{saveCj.isPending ? "Verifying…" : "Connect"}</Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Get a token at{" "}
+               Get your API key at{" "}
               <a className="text-primary underline inline-flex items-center gap-1" href="https://developers.cjdropshipping.com" target="_blank" rel="noreferrer">
                 developers.cjdropshipping.com <ExternalLink className="h-3 w-3" />
-              </a>{" "}— API → personal token.
+               </a>{" "}— My CJ → Authorization → API. Do not paste an access token.
             </p>
           </div>
         </IntegrationCard>

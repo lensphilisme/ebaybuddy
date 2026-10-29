@@ -41,11 +41,12 @@ export const getCjFreight = createServerFn({ method: "POST" })
   .inputValidator((data: { startCountryCode?: string; endCountryCode: string; products: { vid: string; quantity: number }[]; }) => data)
   .handler(async ({ data, context }: any): Promise<CjFreightOption[]> => cjFreightCalculate(data, await tok(context)));
 
-export const saveCjToken = createServerFn({ method: "POST" })
+export const saveCjApiKey = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { accessToken: string }) => data)
+  .inputValidator((data: { apiKey: string }) => data)
   .handler(async ({ data, context }: any) => {
-    if (!data.accessToken?.trim()) throw new Error("Access token is required");
+    const { saveUserCjApiKey } = await import("./cj-auth.server");
+    await saveUserCjApiKey(context.userId, data.apiKey);
     const row = {
       user_id: context.userId,
       provider: "cj",
@@ -53,11 +54,12 @@ export const saveCjToken = createServerFn({ method: "POST" })
       environment: "production",
       is_active: true,
       last_validated_at: new Date().toISOString(),
-      credentials: { access_token: data.accessToken.trim() },
+      credentials: { auth_type: "api_key", managed: true },
     };
     const { data: existing } = await context.supabase.from("integration_credentials").select("id").eq("user_id", context.userId).eq("provider", "cj").eq("label", "default").maybeSingle();
-    if (existing?.id) await context.supabase.from("integration_credentials").update(row).eq("id", existing.id);
-    else await context.supabase.from("integration_credentials").insert(row);
+    const saved = existing?.id ? await context.supabase.from("integration_credentials").update(row).eq("id", existing.id) : await context.supabase.from("integration_credentials").insert(row);
+    if (saved.error) throw new Error("CJ validated your key, but saving failed. Please retry.");
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "cj", message: "CJ API-key connection verified and saved" });
     return { ok: true };
   });
 
@@ -68,10 +70,10 @@ export const getIntegrationStatus = createServerFn({ method: "GET" })
     const { data } = await context.supabase.from("integration_credentials").select("provider,is_active,last_validated_at,credentials").eq("user_id", context.userId);
     const cjRow = data?.find((r: any) => r.provider === "cj");
     const ebayRow = data?.find((r: any) => r.provider === "ebay");
-    const cjConnected = !!(cjRow?.is_active && cjRow.credentials?.access_token) || !!process.env.CJ_ACCESS_TOKEN;
+    const cjConnected = cjRow ? !!(cjRow.is_active && (cjRow.credentials?.managed || cjRow.credentials?.api_key || cjRow.credentials?.access_token)) : !!(process.env.CJ_API_KEY || process.env.CJ_ACCESS_TOKEN);
     const ebayConnected = !!(ebayRow?.is_active && ebayRow.credentials?.refresh_token);
     return {
-      cj: { connected: cjConnected, source: cjRow?.credentials?.access_token ? "user" : cjConnected ? "env" : null, last: cjRow?.last_validated_at || null },
+      cj: { connected: cjConnected, source: cjRow ? "user" : cjConnected ? "env" : null, last: cjRow?.last_validated_at || null },
       ebay: { connected: ebayConnected, source: ebayConnected ? "user" : null, last: ebayRow?.last_validated_at || null },
     };
   });
