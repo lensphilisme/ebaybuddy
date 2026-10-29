@@ -7,10 +7,36 @@ export type CjSession = {
   refresh_expires_at?: number;
 };
 
+export class CjAuthError extends Error {
+  constructor(message: string, public code?: string | number) {
+    super(message);
+    this.name = "CjAuthError";
+  }
+}
+
+/**
+ * CJ has two different secrets and they are NOT interchangeable:
+ * - API key: what the user copies from CJ -> My CJ -> Authorization -> API.
+ *   It is only ever sent to getAccessToken / refreshAccessToken, on the server.
+ * - Access token: what CJ returns for that API key, valid ~180 days, cached
+ *   server-side and renewed automatically. The user must never paste this.
+ *
+ * An access token is JWT-shaped (three dot-separated base64url segments,
+ * usually starting with eyJ). A CJ API key is not. Use this only to give a
+ * clear error before CJ rejects the value — never to reject a key on shape
+ * alone, because CJ is the authority on whether a key is valid.
+ */
+export function isLikelyCjAccessToken(value: string): boolean {
+  const v = value.trim();
+  if (!v) return false;
+  const parts = v.split(".");
+  return parts.length === 3 && parts[0].startsWith("eyJ") && parts.every((p) => /^[A-Za-z0-9_-]+$/.test(p) && p.length >= 8);
+}
+
 export function parseCjSession(data: Record<string, unknown>): CjSession {
-  if (typeof data.accessToken !== "string" || !data.accessToken) throw new Error("CJ did not issue an access token.");
+  if (typeof data.accessToken !== "string" || !data.accessToken) throw new CjAuthError("CJ did not issue an access token.");
   const expires = Date.parse(String(data.accessTokenExpiryDate || ""));
-  if (!Number.isFinite(expires)) throw new Error("CJ did not return a valid token expiry.");
+  if (!Number.isFinite(expires)) throw new CjAuthError("CJ did not return a valid token expiry.");
   return {
     access_token: data.accessToken,
     refresh_token: typeof data.refreshToken === "string" ? data.refreshToken : undefined,
@@ -24,10 +50,13 @@ async function requestSession(body: { apiKey: string } | { refreshToken: string 
   const response = await fetch(`https://developers.cjdropshipping.com/api2.0/v1/authentication/${path}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
-  const json = await response.json() as { code?: number; result?: boolean; data?: Record<string, unknown> };
+  const json = await response.json().catch(() => ({})) as { code?: number; result?: boolean; message?: string; data?: Record<string, unknown> };
   if (!response.ok || json.result === false || json.code !== 200 || !json.data) {
-    if (response.status === 429) throw new Error("CJ is limiting connection requests. Wait a moment and retry.");
-    throw new Error("CJ rejected the connection. Copy your API key (not an access token) from CJ → My CJ → Authorization → API.");
+    if (response.status === 429) throw new CjAuthError("CJ is limiting connection requests. Wait a moment and retry.", json.code);
+    throw new CjAuthError(
+      "CJ rejected this API key. Copy the API key (not an access token) from CJ → My CJ → Authorization → API, and make sure API access is enabled for that account.",
+      json.code,
+    );
   }
   return parseCjSession(json.data);
 }
@@ -48,7 +77,7 @@ async function resolveSession(db: any, key: string, apiKey?: string, candidate =
       session = await requestSession({ apiKey: effectiveKey });
     }
   } else {
-    if (!effectiveKey) throw new Error("Add your CJ API key in Settings to renew this connection.");
+    if (!effectiveKey) throw new CjAuthError("Add your CJ API key in Settings to renew this connection.");
     session = await requestSession({ apiKey: effectiveKey });
   }
   await writeRuntime(db, key, { ...session, api_key: effectiveKey, last_auth_at: Date.now() });
@@ -57,25 +86,38 @@ async function resolveSession(db: any, key: string, apiKey?: string, candidate =
 
 export async function saveUserCjApiKey(userId: string, apiKey: string): Promise<void> {
   const trimmed = apiKey.trim();
-  if (!trimmed || trimmed.length > 200) throw new Error("Enter your CJ API key, up to 200 characters.");
+  if (!trimmed || trimmed.length > 200) throw new CjAuthError("Enter your CJ API key, up to 200 characters.");
+  if (isLikelyCjAccessToken(trimmed)) {
+    throw new CjAuthError(
+      "That looks like a CJ access token, not an API key. Access tokens are issued by CJ and renew automatically — paste only the API key from CJ → My CJ → Authorization → API.",
+    );
+  }
   await withIntegrationLock(`cj:${userId}`, (db) => resolveSession(db, `cj:${userId}`, trimmed, true));
+}
+
+/** Force a fresh exchange using the stored API key (used after CJ revokes a token mid-life, code 1600001). */
+export async function refreshUserCjToken(supabase: any, userId: string): Promise<string> {
+  const { data: row } = await supabase.from("integration_credentials").select("credentials,is_active").eq("user_id", userId).eq("provider", "cj").eq("label", "default").maybeSingle();
+  if (row && !row.is_active) throw new CjAuthError("Reconnect CJ in Settings.");
+  const storedKey = row?.credentials?.api_key;
+  if (storedKey) return withIntegrationLock(`cj:${userId}`, (db) => resolveSession(db, `cj:${userId}`, storedKey, true));
+  return withIntegrationLock(`cj:${userId}`, (db) => resolveSession(db, `cj:${userId}`, undefined, true));
 }
 
 export async function resolveUserCjToken(supabase: any, userId: string): Promise<string> {
   const { data: row, error } = await supabase.from("integration_credentials").select("credentials,is_active").eq("user_id", userId).eq("provider", "cj").eq("label", "default").maybeSingle();
-  if (error) throw new Error("Could not read your CJ connection.");
+  if (error) throw new CjAuthError("Could not read your CJ connection.");
   if (row) {
-    if (!row.is_active) throw new Error("Reconnect CJ in Settings.");
+    if (!row.is_active) throw new CjAuthError("Reconnect CJ in Settings.");
     return withIntegrationLock(`cj:${userId}`, async (db) => {
       const stored = await readRuntime(db, `cj:${userId}`);
-      if (!stored.access_token && row.credentials?.api_key) return resolveSession(db, `cj:${userId}`, row.credentials.api_key);
-      // Preserve old per-user tokens without ever renewing them using another account's key.
-      if (!stored.access_token && row.credentials?.access_token) return row.credentials.access_token;
-      return resolveSession(db, `cj:${userId}`);
+      if (stored.access_token && stored.expires_at > Date.now() + 300_000) return stored.access_token;
+      const apiKey = stored.api_key || row.credentials?.api_key;
+      if (!apiKey) throw new CjAuthError("Reconnect CJ in Settings with your API key (not an access token).");
+      return resolveSession(db, `cj:${userId}`, apiKey);
     });
   }
   const apiKey = process.env.CJ_API_KEY;
   if (apiKey) return withIntegrationLock("cj:workspace", (db) => resolveSession(db, "cj:workspace", apiKey));
-  if (process.env.CJ_ACCESS_TOKEN) return process.env.CJ_ACCESS_TOKEN;
-  throw new Error("Add your CJ API key in Settings first.");
+  throw new CjAuthError("Add your CJ API key in Settings first.");
 }

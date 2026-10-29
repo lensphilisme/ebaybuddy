@@ -1,0 +1,22 @@
+{
+  "total": 2,
+  "offers": [
+    {
+      "offerId": "offer-1",
+      "sku": "CJ-123",
+      "marketplaceId": "EBAY_US",
+      "status": "PUBLISHED",
+      "listing": { "listingId": "111222333", "listingStartDate": "2026-10-20T10:00:00.000Z" },
+      "pricingSummary": { "price": { "value": "19.99", "currency": "USD" } },
+      "availableQuantity": 5
+    },
+    {
+      "offerId": "offer-2",
+      "sku": "CJ-124",
+      "marketplaceId": "EBAY_US",
+      "status": "UNPUBLISHED",
+      "pricingSummary": { "price": { "value": "9.99", "currency": "USD" } },
+      "availableQuantity": 2
+    }
+  ]
+}

@@ -1,6 +1,10 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { ebayConsentUrl, exchangeEbayCode, fetchActiveEbayListings, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
+import { ebayConsentUrl, exchangeEbayCode, fetchPublishedOffersPage, getCategorySuggestions, getEbayCategoryTreeShallow, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
+import { EbayRestClient } from "./ebay/rest.server";
+import { EbayOrderService, EbayReturnService } from "./ebay/orders.server";
+import { EbayNotificationService } from "./ebay/notifications.server";
+import { EbayMarketingService, campaignInput } from "./ebay/marketing.server";
 
 function cleanTitle(value: unknown) {
   return String(value ?? "")
@@ -172,26 +176,28 @@ export const syncEbayListings = createServerFn({ method: "POST" })
   .inputValidator((data: { entriesPerPage?: number }) => data)
   .handler(async ({ data, context }: any) => {
     const token = await getFreshEbayToken(context.supabase, context.userId);
-    const perPage = data.entriesPerPage ?? 200;
-    let page = 1;
+    // Modern Inventory API: 100 offers per page. The Inventory API does not
+    // expose quantitySold / watchCount, so sales/views are NEVER overwritten
+    // here — stored values are preserved and only price/title/stock refresh.
+    const perPage = Math.min(data.entriesPerPage ?? 100, 100);
+    let offset = 0;
     let totalSynced = 0;
     let grandTotal = 0;
-    // eBay caps GetMyeBaySelling at 200 per page; walk until we've covered TotalNumberOfEntries.
     while (true) {
-      const result = await fetchActiveEbayListings(token, page, perPage);
+      const result = await fetchPublishedOffersPage(token, offset, perPage);
       grandTotal = result.total;
+      offset = result.nextOffset;
       for (const item of result.items) {
         const row = {
           user_id: context.userId,
           ebay_item_id: item.itemId,
+          ebay_offer_id: item.offerId,
           sku: item.sku,
           title: item.title,
           price: item.price,
           currency: item.currency,
           marketplace_id: "EBAY_US",
           status: "active",
-          sales: item.quantitySold,
-          views: item.watchCount,
           listed_at: item.listedAt || undefined,
         };
         const { data: existingRows } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).limit(10);
@@ -204,11 +210,10 @@ export const syncEbayListings = createServerFn({ method: "POST" })
         else await context.supabase.from("ebay_listings").insert(row);
       }
       totalSynced += result.items.length;
-      if (result.items.length < perPage || totalSynced >= grandTotal) break;
-      page += 1;
-      if (page > 50) break; // safety cap ~10k listings
+      if (!result.items.length || offset >= grandTotal) break;
+      if (offset > 10000) break; // safety cap
     }
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} of ${grandTotal} active eBay listings`, metadata: { total: grandTotal, synced: totalSynced } });
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)`, metadata: { total: grandTotal, synced: totalSynced } });
     return { total: grandTotal, synced: totalSynced };
   });
 
@@ -350,7 +355,7 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
         actions.push(action);
         if (!data.dryRun) {
           try {
-            if (token && l.ebay_item_id) await endEbayFixedPriceListing(token, l.ebay_item_id, "NotAvailable");
+            if (token && l.ebay_item_id) await endEbayFixedPriceListing(token, l.ebay_item_id, "NotAvailable", l.ebay_offer_id);
             await context.supabase.from("ebay_listings").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", l.id);
           } catch (e) {
             action.error = e instanceof Error ? e.message : String(e);
@@ -384,7 +389,7 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
         actions.push(action);
         if (!data.dryRun && newTitle && newTitle !== l.title) {
           try {
-            if (token && l.ebay_item_id) await reviseEbayListingText(token, l.ebay_item_id, newTitle);
+            if (token && l.ebay_item_id) await reviseEbayListingText(token, l.ebay_item_id, newTitle, undefined, l.sku);
             await context.supabase.from("ebay_listings").update({ title: newTitle }).eq("id", l.id);
           } catch (e) {
             action.error = e instanceof Error ? e.message : String(e);
@@ -394,4 +399,65 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
     }
     await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "info", category: "optimizer", message: `Optimizer ${data.dryRun ? "dry-run" : "run"}: ${actions.length} action(s)`, metadata: { actions } });
     return actions;
+  });
+
+// --- Modern Fulfillment / Returns / Notifications / Marketing (Phase 2-3) ---
+// These are authenticated server functions, not webhooks: eBay webhooks hit
+// the deployed app's public endpoint and must be wired there (see
+// docs/ebay-audit.md), using handleEbayNotification in notifications.server.
+// No function here sends tracking to eBay — CJ owns tracking.
+
+async function ebayClientFor(context: any) {
+  const token = await getFreshEbayToken(context.supabase, context.userId);
+  return new EbayRestClient(token);
+}
+
+export const listEbayOrders = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { offset?: number; status?: string }) => data)
+  .handler(async ({ data, context }: any) => new EbayOrderService(await ebayClientFor(context)).orders(data.offset ?? 0, data.status ?? "ALL"));
+
+export const listEbayDisputes = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { offset?: number }) => data)
+  .handler(async ({ data, context }: any) => new EbayOrderService(await ebayClientFor(context)).disputes(data.offset ?? 0));
+
+export const listEbayReturns = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { offset?: number; filter?: string }) => data)
+  .handler(async ({ data, context }: any) => new EbayReturnService(await ebayClientFor(context)).searchReturns(data.offset ?? 0, data.filter));
+
+export const listEbayNotificationTopics = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }: any) => new EbayNotificationService(await ebayClientFor(context)).topics());
+
+export const listEbayNotificationSubscriptions = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }: any) => new EbayNotificationService(await ebayClientFor(context)).subscriptions());
+
+export const createEbayNotificationSubscription = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { topicId: string; destinationId?: string }) => data)
+  .handler(async ({ data, context }: any) => {
+    const svc = new EbayNotificationService(await ebayClientFor(context));
+    const sub = await svc.createSubscription(data.topicId, data.destinationId);
+    await context.supabase.from("ebay_notification_subscriptions").insert({
+      user_id: context.userId, subscription_id: sub.subscriptionId, topic_id: sub.topicId, destination_id: sub.destinationId, status: sub.status || "active",
+    });
+    return sub;
+  });
+
+export const listEbayCampaigns = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { offset?: number }) => data)
+  .handler(async ({ data, context }: any) => new EbayMarketingService(await ebayClientFor(context)).campaigns(data.offset ?? 0));
+
+export const createEbayCampaign = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { name: string; strategy: "FIXED" | "DYNAMIC"; rate: number; listingIds: string[] }) => data)
+  .handler(async ({ data, context }: any) => {
+    // DYNAMIC = eBay's auto ad-rate strategy (trending category rates).
+    // FIXED requires an explicit rate, validated by campaignInput in marketing.server.
+    campaignInput.parse(data);
+    return new EbayMarketingService(await ebayClientFor(context)).create(data);
   });

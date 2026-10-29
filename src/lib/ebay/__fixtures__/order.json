@@ -1,0 +1,8 @@
+{
+  "orderId": "order-1",
+  "creationDate": "2026-10-21T10:00:00.000Z",
+  "orderFulfillmentStatus": "NOT_STARTED",
+  "orderPaymentStatus": "PAID",
+  "pricingSummary": { "total": { "value": "19.99", "currency": "USD" } },
+  "lineItems": [{ "lineItemId": "li-1", "legacyItemId": "111222333", "sku": "CJ-123", "title": "Test Widget", "quantity": 1 }]
+}

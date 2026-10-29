@@ -1,4 +1,4 @@
-import { ebayFetch as fetch } from "./http";
+import { ebayFetch as fetch, classifyEbayError, EbayAuthError } from "./http";
 const EBAY_API_BASE = "https://api.ebay.com";
 import { withIntegrationLock } from "../integration-runtime.server";
 import { readRuntime, writeRuntime } from "../integration-runtime.server";
@@ -17,6 +17,9 @@ const SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
   "https://api.ebay.com/oauth/api_scope/sell.marketing",
   "https://api.ebay.com/oauth/api_scope/sell.payment.dispute",
+  // Needed for Event Notification subscriptions. Accounts connected before
+  // this scope was added must reconnect once in Settings to grant it.
+  "https://api.ebay.com/oauth/api_scope/sell.notification",
 ].join(" ");
 
 function required(name: string) {
@@ -50,7 +53,7 @@ export async function exchangeEbayCode(code: string): Promise<EbayCredential> {
     body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: required("EBAY_RUNAME") }),
   });
   const json = await res.json();
-  if (!res.ok) throw new Error(`eBay OAuth error: ${json.error_description || json.error || res.statusText}`);
+  if (!res.ok) throw classifyEbayError(res.status, `eBay OAuth error: ${json.error_description || json.error || res.statusText}`, res.headers.get("x-ebay-c-request-id") || undefined);
   return {
     refresh_token: json.refresh_token,
     access_token: json.access_token,
@@ -71,7 +74,7 @@ export async function refreshEbayAccessToken(refreshToken: string): Promise<Ebay
     body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }),
   });
   const json = await res.json();
-  if (!res.ok) throw new Error(`eBay refresh error: ${json.error_description || json.error || res.statusText}`);
+  if (!res.ok) throw classifyEbayError(res.status, `eBay refresh error: ${json.error_description || json.error || res.statusText}`, res.headers.get("x-ebay-c-request-id") || undefined);
   return { access_token: json.access_token, expires_at: Date.now() + (Number(json.expires_in || 7200) - 120) * 1000 };
 }
 
@@ -84,7 +87,7 @@ export async function getUserEbayCredential(supabase: any, userId: string): Prom
     .eq("label", "default")
     .maybeSingle();
   const creds = (data?.credentials || {}) as EbayCredential;
-  if (!creds.refresh_token) throw new Error("Connect your eBay seller account in Settings first.");
+  if (!creds.refresh_token) throw new EbayAuthError("Connect your eBay seller account in Settings first.");
   return creds;
 }
 
@@ -97,7 +100,7 @@ export async function getFreshEbayToken(supabase: any, userId: string) {
 async function getFreshEbayTokenInner(supabase: any, userId: string) {
   const creds = await getUserEbayCredential(supabase, userId);
   if (creds.access_token && creds.expires_at && creds.expires_at > Date.now() + 60_000) return creds.access_token;
-  if (!creds.refresh_token) throw new Error("Reconnect eBay in Settings.");
+  if (!creds.refresh_token) throw new EbayAuthError("Reconnect eBay in Settings.");
   const fresh = await refreshEbayAccessToken(creds.refresh_token);
   const row = {
     user_id: userId,
@@ -110,7 +113,7 @@ async function getFreshEbayTokenInner(supabase: any, userId: string) {
   };
   const { data: existing } = await supabase.from("integration_credentials").select("id").eq("user_id", userId).eq("provider", "ebay").eq("label", "default").maybeSingle();
   const saved = existing?.id ? await supabase.from("integration_credentials").update(row).eq("id", existing.id) : await supabase.from("integration_credentials").insert(row);
-  if (saved.error || !fresh.access_token) throw new Error("Could not renew your eBay connection.");
+  if (saved.error || !fresh.access_token) throw new EbayAuthError("Could not renew your eBay connection.");
   return fresh.access_token;
 }
 
@@ -123,7 +126,7 @@ export async function getEbayApplicationToken(): Promise<string> {
       body: new URLSearchParams({ grant_type: "client_credentials", scope: "https://api.ebay.com/oauth/api_scope" }),
     }, { maxRetries: 0 });
     const json = await res.json();
-    if (!res.ok || !json.access_token) throw new Error("Could not authorize the eBay application.");
+    if (!res.ok || !json.access_token) throw classifyEbayError(res.status, "Could not authorize the eBay application.", res.headers.get("x-ebay-c-request-id") || undefined);
     await writeRuntime(db, "ebay:application", { access_token: json.access_token, expires_at: Date.now() + Number(json.expires_in) * 1000 });
     return json.access_token;
   });

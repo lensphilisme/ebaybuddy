@@ -6,6 +6,17 @@ const CJ_BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 
 type CjEnvelope<T> = { code: number; result?: boolean; success?: boolean; message: string; data: T };
 
+/** CJ 1600001/1600002: token invalid or expired. Callers retry once after a forced API-key exchange. */
+export class CjTokenExpiredError extends Error {
+  constructor(message = "Your CJ connection expired or was revoked.") {
+    super(message);
+    this.name = "CjTokenExpiredError";
+  }
+}
+export function isCjTokenError(error: unknown): boolean {
+  return error instanceof CjTokenExpiredError || /1600001|1600002|access token.*(invalid|expired)/i.test(error instanceof Error ? error.message : String(error));
+}
+
 async function cjFetch<T>(path: string, init: RequestInit = {}, overrideToken?: string): Promise<T> {
   return cjFetchOnce<T>(path, init, overrideToken);
 }
@@ -29,7 +40,7 @@ async function cjFetchOnce<T>(path: string, init: RequestInit = {}, overrideToke
     throw new Error(`CJ returned an unreadable response (${res.status}). Please retry.`);
   }
   if (json.result === false || json.success === false || (json.code && json.code !== 200)) {
-    if (/1600001|access token|invalid.*key/i.test(`${json.code} ${json.message}`)) throw new Error("Your CJ connection expired or was revoked. Reconnect with your API key in Settings.");
+    if (/1600001|1600002|access token/i.test(`${json.code} ${json.message}`)) throw new CjTokenExpiredError("Your CJ access token expired or was revoked. It will be renewed from your saved API key.");
     throw new Error(`CJ request failed (${json.code}). Please retry or check your CJ account quota.`);
   }
   return json.data;

@@ -1,0 +1,6 @@
+{
+  "sku": "CJ-123",
+  "product": { "title": "Test Widget", "imageUrls": ["https://example.com/img.jpg"], "aspects": { "Brand": ["Unbranded"] } },
+  "availability": { "shipToLocationAvailability": { "quantity": 5 } },
+  "condition": "NEW"
+}

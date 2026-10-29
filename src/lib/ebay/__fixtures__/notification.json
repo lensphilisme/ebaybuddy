@@ -1,0 +1,4 @@
+{
+  "metadata": { "topic": "ITEM_SOLD", "schemaVersion": "1.0" },
+  "notification": { "notificationId": "notif-1", "subscriptionId": "sub-1", "eventDate": "2026-10-21T10:00:00.000Z", "data": {} }
+}

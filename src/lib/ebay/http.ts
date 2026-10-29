@@ -48,7 +48,7 @@ export function backoffDelay(attempt: number, retryAfterHeader?: string | null) 
   return Math.min(300 * 2 ** attempt, 5_000) + Math.floor(Math.random() * 100);
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(() => r(), ms));
 const queues = new Map<string, Promise<void>>();
 async function paced(key: string) {
   const previous = queues.get(key) || Promise.resolve();
