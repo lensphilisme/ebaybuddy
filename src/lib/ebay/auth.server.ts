@@ -17,9 +17,8 @@ const SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
   "https://api.ebay.com/oauth/api_scope/sell.marketing",
   "https://api.ebay.com/oauth/api_scope/sell.payment.dispute",
-  // Needed for Event Notification subscriptions. Accounts connected before
-  // this scope was added must reconnect once in Settings to grant it.
-  "https://api.ebay.com/oauth/api_scope/sell.notification",
+  // Commerce Notification topic discovery uses the base application scope.
+  // Topic-specific user grants are checked against the live topic catalog.
 ].join(" ");
 
 function required(name: string) {
