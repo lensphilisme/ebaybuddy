@@ -470,3 +470,11 @@ export const createEbayCampaign = createServerFn({ method: "POST" })
     campaignInput.parse(data);
     return new EbayMarketingService(await ebayClientFor(context)).create(data);
   });
+
+export const changeEbayCampaign = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { id: string; action: "pause" | "resume" | "end" }) => {
+    if (!data.id || !["pause", "resume", "end"].includes(data.action)) throw new Error("Invalid campaign action.");
+    return data;
+  })
+  .handler(async ({ data, context }: any) => new EbayMarketingService(await ebayClientFor(context)).action(data.id, data.action));
