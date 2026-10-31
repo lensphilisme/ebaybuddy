@@ -97,7 +97,13 @@ export async function saveUserCjApiKey(userId: string, apiKey: string): Promise<
 
 /** Force a fresh exchange using the stored API key (used after CJ revokes a token mid-life, code 1600001). */
 export async function refreshUserCjToken(supabase: any, userId: string): Promise<string> {
-  const { data: row } = await supabase.from("integration_credentials").select("credentials,is_active").eq("user_id", userId).eq("provider", "cj").eq("label", "default").maybeSingle();
+  const { data: row, error } = await supabase.from("integration_credentials").select("credentials,is_active").eq("user_id", userId).eq("provider", "cj").eq("label", "default").maybeSingle();
+  if (error) throw new CjAuthError("Could not read your CJ connection.");
+  if (!row) {
+    const apiKey = process.env.CJ_API_KEY;
+    if (!apiKey) throw new CjAuthError("Add your CJ API key in Settings first.");
+    return withIntegrationLock("cj:workspace", (db) => resolveSession(db, "cj:workspace", apiKey, true));
+  }
   if (row && !row.is_active) throw new CjAuthError("Reconnect CJ in Settings.");
   const storedKey = row?.credentials?.api_key;
   if (storedKey) return withIntegrationLock(`cj:${userId}`, (db) => resolveSession(db, `cj:${userId}`, storedKey, true));

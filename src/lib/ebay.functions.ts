@@ -5,6 +5,7 @@ import { EbayRestClient } from "./ebay/rest.server";
 import { EbayOrderService, EbayReturnService } from "./ebay/orders.server";
 import { EbayNotificationService } from "./ebay/notifications.server";
 import { EbayMarketingService, campaignInput } from "./ebay/marketing.server";
+import { requireLiveOptimizer, requireListingIdentity } from "./ebay/optimizer-policy";
 
 function cleanTitle(value: unknown) {
   return String(value ?? "")
@@ -197,6 +198,7 @@ export const syncEbayListings = createServerFn({ method: "POST" })
           price: item.price,
           currency: item.currency,
           marketplace_id: "EBAY_US",
+          image_url: item.imageUrl || undefined,
           status: "active",
           listed_at: item.listedAt || undefined,
         };
@@ -210,7 +212,7 @@ export const syncEbayListings = createServerFn({ method: "POST" })
         else await context.supabase.from("ebay_listings").insert(row);
       }
       totalSynced += result.items.length;
-      if (!result.items.length || offset >= grandTotal) break;
+      if (offset >= grandTotal) break;
       if (offset > 10000) break; // safety cap
     }
     await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)`, metadata: { total: grandTotal, synced: totalSynced } });
@@ -337,8 +339,9 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { dryRun?: boolean; listingIds?: string[] }) => data)
   .handler(async ({ data, context }: any) => {
-    const token = data.dryRun ? null : await getFreshEbayToken(context.supabase, context.userId).catch(() => null);
+    const token = data.dryRun ? null : await getFreshEbayToken(context.supabase, context.userId);
     const { data: rule } = await context.supabase.from("automation_rules").select("*").eq("user_id", context.userId).maybeSingle();
+    if (!data.dryRun) requireLiveOptimizer(rule, token);
     const daysNoSales = Number(rule?.optimizer_no_sales_days ?? 30);
     const daysNoViewsRewrite = Number(rule?.optimizer_low_views_days ?? 14);
     const poorExposureDays = Number(rule?.optimizer_poor_exposure_days ?? 45);
@@ -355,11 +358,14 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
         actions.push(action);
         if (!data.dryRun) {
           try {
-            if (token && l.ebay_item_id) await endEbayFixedPriceListing(token, l.ebay_item_id, "NotAvailable", l.ebay_offer_id);
-            await context.supabase.from("ebay_listings").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", l.id);
+            requireListingIdentity(l.ebay_item_id, l.ebay_offer_id);
+            if (!token) throw new Error("Reconnect eBay first.");
+            await endEbayFixedPriceListing(token, l.ebay_item_id, "NotAvailable", l.ebay_offer_id);
+            const saved = await context.supabase.from("ebay_listings").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", l.id);
+            if (saved.error) throw new Error("eBay ended the listing, but saving failed. Re-sync listings.");
           } catch (e) {
             action.error = e instanceof Error ? e.message : String(e);
-            await context.supabase.from("ebay_listings").update({ status: "error" }).eq("id", l.id);
+            action.action = "failed";
           }
         }
         continue;
@@ -389,8 +395,11 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
         actions.push(action);
         if (!data.dryRun && newTitle && newTitle !== l.title) {
           try {
-            if (token && l.ebay_item_id) await reviseEbayListingText(token, l.ebay_item_id, newTitle, undefined, l.sku);
-            await context.supabase.from("ebay_listings").update({ title: newTitle }).eq("id", l.id);
+            requireListingIdentity(l.ebay_item_id, l.ebay_offer_id);
+            if (!token) throw new Error("Reconnect eBay first.");
+            await reviseEbayListingText(token, l.ebay_item_id, newTitle, undefined, l.sku);
+            const saved = await context.supabase.from("ebay_listings").update({ title: newTitle }).eq("id", l.id);
+            if (saved.error) throw new Error("eBay updated the title, but saving failed. Re-sync listings.");
           } catch (e) {
             action.error = e instanceof Error ? e.message : String(e);
           }
@@ -461,3 +470,11 @@ export const createEbayCampaign = createServerFn({ method: "POST" })
     campaignInput.parse(data);
     return new EbayMarketingService(await ebayClientFor(context)).create(data);
   });
+
+export const changeEbayCampaign = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { id: string; action: "pause" | "resume" | "end" }) => {
+    if (!data.id || !["pause", "resume", "end"].includes(data.action)) throw new Error("Invalid campaign action.");
+    return data;
+  })
+  .handler(async ({ data, context }: any) => new EbayMarketingService(await ebayClientFor(context)).action(data.id, data.action));

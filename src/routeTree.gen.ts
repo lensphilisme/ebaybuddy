@@ -16,7 +16,9 @@ import { Route as AuthenticatedDashboardRouteImport } from './routes/_authentica
 import { Route as AuthenticatedDraftsRouteImport } from './routes/_authenticated/drafts'
 import { Route as AuthenticatedListingsRouteImport } from './routes/_authenticated/listings'
 import { Route as AuthenticatedLogsRouteImport } from './routes/_authenticated/logs'
+import { Route as AuthenticatedMarketingRouteImport } from './routes/_authenticated/marketing'
 import { Route as AuthenticatedOptimizerRouteImport } from './routes/_authenticated/optimizer'
+import { Route as AuthenticatedOrdersRouteImport } from './routes/_authenticated/orders'
 import { Route as AuthenticatedRulesRouteImport } from './routes/_authenticated/rules'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
 import { Route as EbayCallbackRouteImport } from './routes/ebay.callback'
@@ -57,9 +59,19 @@ const AuthenticatedLogsRoute = AuthenticatedLogsRouteImport.update({
   path: '/logs',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedMarketingRoute = AuthenticatedMarketingRouteImport.update({
+  id: '/marketing',
+  path: '/marketing',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
 const AuthenticatedOptimizerRoute = AuthenticatedOptimizerRouteImport.update({
   id: '/optimizer',
   path: '/optimizer',
+  getParentRoute: () => AuthenticatedRouteRoute,
+} as any)
+const AuthenticatedOrdersRoute = AuthenticatedOrdersRouteImport.update({
+  id: '/orders',
+  path: '/orders',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
 const AuthenticatedRulesRoute = AuthenticatedRulesRouteImport.update({
@@ -97,7 +109,9 @@ export interface FileRoutesByFullPath {
   '/drafts': typeof AuthenticatedDraftsRoute
   '/listings': typeof AuthenticatedListingsRoute
   '/logs': typeof AuthenticatedLogsRoute
+  '/marketing': typeof AuthenticatedMarketingRoute
   '/optimizer': typeof AuthenticatedOptimizerRoute
+  '/orders': typeof AuthenticatedOrdersRoute
   '/rules': typeof AuthenticatedRulesRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/ebay/callback': typeof EbayCallbackRoute
@@ -111,7 +125,9 @@ export interface FileRoutesByTo {
   '/drafts': typeof AuthenticatedDraftsRoute
   '/listings': typeof AuthenticatedListingsRoute
   '/logs': typeof AuthenticatedLogsRoute
+  '/marketing': typeof AuthenticatedMarketingRoute
   '/optimizer': typeof AuthenticatedOptimizerRoute
+  '/orders': typeof AuthenticatedOrdersRoute
   '/rules': typeof AuthenticatedRulesRoute
   '/settings': typeof AuthenticatedSettingsRoute
   '/ebay/callback': typeof EbayCallbackRoute
@@ -127,7 +143,9 @@ export interface FileRoutesById {
   '/_authenticated/drafts': typeof AuthenticatedDraftsRoute
   '/_authenticated/listings': typeof AuthenticatedListingsRoute
   '/_authenticated/logs': typeof AuthenticatedLogsRoute
+  '/_authenticated/marketing': typeof AuthenticatedMarketingRoute
   '/_authenticated/optimizer': typeof AuthenticatedOptimizerRoute
+  '/_authenticated/orders': typeof AuthenticatedOrdersRoute
   '/_authenticated/rules': typeof AuthenticatedRulesRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
   '/ebay/callback': typeof EbayCallbackRoute
@@ -143,7 +161,9 @@ export interface FileRouteTypes {
     | '/drafts'
     | '/listings'
     | '/logs'
+    | '/marketing'
     | '/optimizer'
+    | '/orders'
     | '/rules'
     | '/settings'
     | '/ebay/callback'
@@ -157,7 +177,9 @@ export interface FileRouteTypes {
     | '/drafts'
     | '/listings'
     | '/logs'
+    | '/marketing'
     | '/optimizer'
+    | '/orders'
     | '/rules'
     | '/settings'
     | '/ebay/callback'
@@ -172,7 +194,9 @@ export interface FileRouteTypes {
     | '/_authenticated/drafts'
     | '/_authenticated/listings'
     | '/_authenticated/logs'
+    | '/_authenticated/marketing'
     | '/_authenticated/optimizer'
+    | '/_authenticated/orders'
     | '/_authenticated/rules'
     | '/_authenticated/settings'
     | '/ebay/callback'
@@ -238,11 +262,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedLogsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/marketing': {
+      id: '/_authenticated/marketing'
+      path: '/marketing'
+      fullPath: '/marketing'
+      preLoaderRoute: typeof AuthenticatedMarketingRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/optimizer': {
       id: '/_authenticated/optimizer'
       path: '/optimizer'
       fullPath: '/optimizer'
       preLoaderRoute: typeof AuthenticatedOptimizerRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/orders': {
+      id: '/_authenticated/orders'
+      path: '/orders'
+      fullPath: '/orders'
+      preLoaderRoute: typeof AuthenticatedOrdersRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/rules': {
@@ -288,7 +326,9 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDraftsRoute: typeof AuthenticatedDraftsRoute
   AuthenticatedListingsRoute: typeof AuthenticatedListingsRoute
   AuthenticatedLogsRoute: typeof AuthenticatedLogsRoute
+  AuthenticatedMarketingRoute: typeof AuthenticatedMarketingRoute
   AuthenticatedOptimizerRoute: typeof AuthenticatedOptimizerRoute
+  AuthenticatedOrdersRoute: typeof AuthenticatedOrdersRoute
   AuthenticatedRulesRoute: typeof AuthenticatedRulesRoute
   AuthenticatedSettingsRoute: typeof AuthenticatedSettingsRoute
   AuthenticatedProductsPidRoute: typeof AuthenticatedProductsPidRoute
@@ -300,7 +340,9 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDraftsRoute: AuthenticatedDraftsRoute,
   AuthenticatedListingsRoute: AuthenticatedListingsRoute,
   AuthenticatedLogsRoute: AuthenticatedLogsRoute,
+  AuthenticatedMarketingRoute: AuthenticatedMarketingRoute,
   AuthenticatedOptimizerRoute: AuthenticatedOptimizerRoute,
+  AuthenticatedOrdersRoute: AuthenticatedOrdersRoute,
   AuthenticatedRulesRoute: AuthenticatedRulesRoute,
   AuthenticatedSettingsRoute: AuthenticatedSettingsRoute,
   AuthenticatedProductsPidRoute: AuthenticatedProductsPidRoute,
