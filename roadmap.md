@@ -1,5 +1,7 @@
 # Remaining integration work
 
+- [x] Identify the CJ-to-eBay variant parser file requested by the user: src/lib/ebay/inventory.server.ts.
+
 - [x] CJ API-key validation, per-user token lifecycle, settings and tests. — Fixed 2026-10-28: runtime upsert bug, API-key-only flow, JWT-token detection, forced-refresh retry. See docs/ebay-audit.md.
 - [x] Audit and modularize eBay clients, OAuth, logging, pacing and tests. — Trading API removed; clients in src/lib/ebay/ via EbayRestClient; OAuth mutex refresh; typed errors; 12 bun tests pass.
 - [ ] Modern orders, disputes and marketing pages with pagination and explicit error states.
