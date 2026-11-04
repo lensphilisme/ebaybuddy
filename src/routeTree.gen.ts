@@ -24,6 +24,7 @@ import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticat
 import { Route as EbayCallbackRouteImport } from './routes/ebay.callback'
 import { Route as AuthenticatedProductsIndexRouteImport } from './routes/_authenticated/products.index'
 import { Route as AuthenticatedProductsPidRouteImport } from './routes/_authenticated/products.$pid'
+import { Route as ApiPublicEbayNotificationsRouteImport } from './routes/api/public/ebay/notifications'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -101,6 +102,12 @@ const AuthenticatedProductsPidRoute =
     path: '/products/$pid',
     getParentRoute: () => AuthenticatedRouteRoute,
   } as any)
+const ApiPublicEbayNotificationsRoute =
+  ApiPublicEbayNotificationsRouteImport.update({
+    id: '/api/public/ebay/notifications',
+    path: '/api/public/ebay/notifications',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -117,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/ebay/callback': typeof EbayCallbackRoute
   '/products/$pid': typeof AuthenticatedProductsPidRoute
   '/products/': typeof AuthenticatedProductsIndexRoute
+  '/api/public/ebay/notifications': typeof ApiPublicEbayNotificationsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -133,6 +141,7 @@ export interface FileRoutesByTo {
   '/ebay/callback': typeof EbayCallbackRoute
   '/products/$pid': typeof AuthenticatedProductsPidRoute
   '/products': typeof AuthenticatedProductsIndexRoute
+  '/api/public/ebay/notifications': typeof ApiPublicEbayNotificationsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -151,6 +160,7 @@ export interface FileRoutesById {
   '/ebay/callback': typeof EbayCallbackRoute
   '/_authenticated/products/$pid': typeof AuthenticatedProductsPidRoute
   '/_authenticated/products/': typeof AuthenticatedProductsIndexRoute
+  '/api/public/ebay/notifications': typeof ApiPublicEbayNotificationsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -169,6 +179,7 @@ export interface FileRouteTypes {
     | '/ebay/callback'
     | '/products/$pid'
     | '/products/'
+    | '/api/public/ebay/notifications'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -185,6 +196,7 @@ export interface FileRouteTypes {
     | '/ebay/callback'
     | '/products/$pid'
     | '/products'
+    | '/api/public/ebay/notifications'
   id:
     | '__root__'
     | '/'
@@ -202,6 +214,7 @@ export interface FileRouteTypes {
     | '/ebay/callback'
     | '/_authenticated/products/$pid'
     | '/_authenticated/products/'
+    | '/api/public/ebay/notifications'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -209,6 +222,7 @@ export interface RootRouteChildren {
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
   EbayCallbackRoute: typeof EbayCallbackRoute
+  ApiPublicEbayNotificationsRoute: typeof ApiPublicEbayNotificationsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -318,6 +332,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedProductsPidRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/api/public/ebay/notifications': {
+      id: '/api/public/ebay/notifications'
+      path: '/api/public/ebay/notifications'
+      fullPath: '/api/public/ebay/notifications'
+      preLoaderRoute: typeof ApiPublicEbayNotificationsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -357,6 +378,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
   EbayCallbackRoute: EbayCallbackRoute,
+  ApiPublicEbayNotificationsRoute: ApiPublicEbayNotificationsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
