@@ -31,7 +31,9 @@ function OptimizerPage() {
     mutationFn: (dryRun: boolean) => runFn({ data: { dryRun } }),
     onSuccess: (rows: any[], dryRun) => {
       setActions(rows);
-      toast.success(`${dryRun ? "Preview" : "Applied"} · ${rows.length} action(s)`);
+      const failed = rows.filter((row) => row.error).length;
+      if (failed) toast.error(`${failed} action(s) failed; check the details below.`);
+      else toast.success(`${dryRun ? "Preview" : "Applied"} · ${rows.length} action(s)`);
       refetch();
     },
     onError: (e: Error) => toast.error(e.message),

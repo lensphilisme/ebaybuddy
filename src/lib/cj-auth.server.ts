@@ -63,12 +63,13 @@ async function requestSession(body: { apiKey: string } | { refreshToken: string 
 
 async function resolveSession(db: any, key: string, apiKey?: string, candidate = false): Promise<string> {
   const stored = await readRuntime(db, key);
+  const effectiveKey = apiKey || stored.api_key;
+  if (!effectiveKey) throw new CjAuthError("Reconnect CJ with your API key. Token-only connections are not supported.");
   if (!candidate && stored.access_token && stored.expires_at > Date.now() + 300_000) return stored.access_token;
   const wait = Number(stored.last_auth_at || 0) + 1100 - Date.now();
   if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
   await writeRuntime(db, key, { ...stored, last_auth_at: Date.now() });
   let session: CjSession;
-  const effectiveKey = apiKey || stored.api_key;
   if (!candidate && stored.refresh_token && stored.refresh_expires_at > Date.now() + 300_000) {
     try { session = await requestSession({ refreshToken: stored.refresh_token }); }
     catch (error) {
@@ -117,9 +118,9 @@ export async function resolveUserCjToken(supabase: any, userId: string): Promise
     if (!row.is_active) throw new CjAuthError("Reconnect CJ in Settings.");
     return withIntegrationLock(`cj:${userId}`, async (db) => {
       const stored = await readRuntime(db, `cj:${userId}`);
-      if (stored.access_token && stored.expires_at > Date.now() + 300_000) return stored.access_token;
       const apiKey = stored.api_key || row.credentials?.api_key;
       if (!apiKey) throw new CjAuthError("Reconnect CJ in Settings with your API key (not an access token).");
+      if (stored.access_token && stored.expires_at > Date.now() + 300_000) return stored.access_token;
       return resolveSession(db, `cj:${userId}`, apiKey);
     });
   }

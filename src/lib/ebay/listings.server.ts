@@ -32,9 +32,10 @@ export async function fetchPublishedOffersPage(
     total = page.total || 0;
     const offers = page.offers || [];
     if (!offers.length) break;
-    cursor += offers.length;
     for (const offer of offers) {
       if (items.length >= capped) break;
+      // Advance only for source offers actually consumed, never the whole page.
+      cursor += 1;
       if (offer.status && offer.status !== "PUBLISHED") continue;
       let item: InventoryRecord | null = null;
       try {

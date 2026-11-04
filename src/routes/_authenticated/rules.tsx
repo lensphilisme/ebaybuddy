@@ -17,10 +17,11 @@ function RulesPage() {
   const { data: rule, refetch } = useQuery({ queryKey: ["automation-rules"], enabled: !!user, queryFn: async () => {
     const { data } = await supabase.from("automation_rules").select("*").maybeSingle();
     if (data) return data;
-    const { data: created, error } = await supabase.from("automation_rules").insert({ user_id: user!.id }).select().single();
+    if (!user) throw new Error("Sign in first.");
+    const { data: created, error } = await supabase.from("automation_rules").insert({ user_id: user.id }).select().single();
     if (error) throw error; return created;
   }});
-  async function save(patch: any) { const { error } = await supabase.from("automation_rules").update(patch).eq("id", rule!.id); if (error) toast.error(error.message); else { toast.success("Rule saved"); refetch(); } }
+  async function save(patch: any) { if (!rule) return; const { error } = await supabase.from("automation_rules").update(patch).eq("id", rule.id); if (error) toast.error(error.message); else { toast.success("Rule saved"); refetch(); } }
   return <AppShell title="Rules" subtitle="Pricing, profit floors and the AI optimizer guardrails">
     {rule && <div className="grid gap-4 lg:grid-cols-2">
       <Card><CardHeader><CardTitle>Pricing & guardrails</CardTitle><CardDescription>Applied when CJ products are pushed to eBay drafts.</CardDescription></CardHeader><CardContent className="grid gap-4 sm:grid-cols-2">
