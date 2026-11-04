@@ -11,7 +11,7 @@ import { EBAY_NOTIFICATION_TOPICS } from "./contracts";
 export { EBAY_NOTIFICATION_TOPICS };
 
 /**
- * Modern Event Notification API (sell/notification), replacing legacy
+ * Modern Event Notification API (commerce/notification), replacing legacy
  * platform notifications. Subscriptions need a destination created first
  * in eBay (a webhook endpoint owned by the deployed app); this service
  * does not invent one. Set EBAY_NOTIFICATION_DESTINATION_ID to enable
@@ -20,14 +20,14 @@ export { EBAY_NOTIFICATION_TOPICS };
 export class EbayNotificationService {
   constructor(private client: EbayRestClient) {}
   topics() {
-    return this.client.json<Page<{ topics: Topic[] }>>(`/sell/notification/v1/topic?limit=200`);
+    return this.client.json<Page<{ topics: Topic[] }>>(`/commerce/notification/v1/topic?limit=100`);
   }
   subscriptions() {
     return this.client.json<Page<{ subscriptions: NotificationSubscription[] }>>(
-      `/sell/notification/v1/subscription?limit=200`,
+      `/commerce/notification/v1/subscription?limit=100`,
     );
   }
-  createSubscription(
+  async createSubscription(
     topicId: string,
     destinationId = process.env.EBAY_NOTIFICATION_DESTINATION_ID,
   ) {
@@ -36,14 +36,20 @@ export class EbayNotificationService {
         "EBAY_NOTIFICATION_DESTINATION_ID is not configured. Create a webhook destination in eBay first, then set its ID — a subscription cannot be created without one.",
       );
     }
-    return this.client.json<NotificationSubscription>(`/sell/notification/v1/subscription`, {
+    const topic = await this.client.json<Topic>(`/commerce/notification/v1/topic/${encodeURIComponent(topicId)}`);
+    const payload = topic.supportedPayloads?.find((item) => !item.deprecated && item.deliveryProtocol === "HTTPS" && item.format.includes("JSON"));
+    if (topic.status !== "ENABLED" || !payload) throw new Error("This notification topic is not available for HTTPS/JSON delivery.");
+    const response = await this.client.response(`/commerce/notification/v1/subscription`, {
       method: "POST",
-      body: JSON.stringify({ topicId, destinationId, schemaVersion: "1.0" }),
+      body: JSON.stringify({ topicId, destinationId, status: "ENABLED", payload: { deliveryProtocol: "HTTPS", format: "JSON", schemaVersion: payload.schemaVersion } }),
     });
+    const id = response.headers.get("location")?.split("/").pop();
+    if (!id) throw new Error("eBay did not return the subscription ID. Refresh subscriptions before retrying.");
+    return { subscriptionId: id, topicId, destinationId, status: "ENABLED" } satisfies NotificationSubscription;
   }
   deleteSubscription(subscriptionId: string) {
     return this.client.response(
-      `/sell/notification/v1/subscription/${encodeURIComponent(subscriptionId)}`,
+      `/commerce/notification/v1/subscription/${encodeURIComponent(subscriptionId)}`,
       { method: "DELETE" },
     );
   }
@@ -100,25 +106,24 @@ export function classifyNotification(
 export async function handleEbayNotification(supabase: any, envelope: NotificationEnvelope) {
   const notificationId = envelope.notification?.notificationId;
   if (!notificationId) throw new Error("eBay notification has no notificationId.");
-  const { data: existing } = await supabase
-    .from("ebay_notification_receipts")
-    .select("notification_id")
-    .eq("notification_id", notificationId)
-    .maybeSingle();
-  const { action, topic } = classifyNotification(envelope, !!existing);
-  if (action === "duplicate") return { action, topic, notificationId };
-  await supabase.from("ebay_notification_receipts").insert({
-    notification_id: notificationId,
-    subscription_id: envelope.notification?.subscriptionId || "unknown",
-    status: "received",
+  const subscriptionId = envelope.notification?.subscriptionId;
+  if (!subscriptionId) throw new Error("eBay notification has no subscriptionId.");
+  const { data: subscription, error: subscriptionError } = await supabase.from("ebay_notification_subscriptions").select("user_id,topic_id").eq("subscription_id", subscriptionId).maybeSingle();
+  if (subscriptionError) throw new Error("Subscription lookup failed.");
+  if (!subscription || subscription.topic_id !== envelope.metadata.topic) throw new Error("Unknown notification subscription.");
+  const { withIntegrationLock } = await import("../integration-runtime.server");
+  return withIntegrationLock(`notification:${notificationId}`, async () => {
+    const { data: existing, error } = await supabase.from("ebay_notification_receipts").select("processed_at").eq("notification_id", notificationId).maybeSingle();
+    if (error) throw new Error("Notification lookup failed.");
+    const { action, topic } = classifyNotification(envelope, !!existing?.processed_at);
+    if (action === "duplicate") return { action, topic, notificationId };
+    const receipt = await supabase.from("ebay_notification_receipts").upsert({ notification_id: notificationId, subscription_id: subscriptionId, status: "processing" });
+    if (receipt.error) throw new Error("Could not save notification.");
+    const log = await supabase.from("activity_logs").insert({ user_id: subscription.user_id, level: "info", category: "ebay", message: `eBay notification: ${topic}`, metadata: { notificationId, topic, eventDate: envelope.notification?.eventDate || null } });
+    if (log.error) throw new Error("Could not record notification.");
+    // Never guess stock adjustments from an undocumented payload or send tracking.
+    const saved = await supabase.from("ebay_notification_receipts").update({ status: "processed", processed_at: new Date().toISOString() }).eq("notification_id", notificationId);
+    if (saved.error) throw new Error("Could not acknowledge notification.");
+    return { action, topic, notificationId };
   });
-  if (action !== "ignored") {
-    await supabase.from("activity_logs").insert({
-      level: "info",
-      category: "ebay",
-      message: `eBay notification: ${topic}`,
-      metadata: { notificationId, topic, eventDate: envelope.notification?.eventDate || null },
-    });
-  }
-  return { action, topic, notificationId };
 }

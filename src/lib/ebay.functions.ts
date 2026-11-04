@@ -434,11 +434,14 @@ export const listEbayDisputes = createServerFn({ method: "POST" })
 export const listEbayReturns = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { offset?: number; filter?: string }) => data)
-  .handler(async ({ data, context }: any) => new EbayReturnService(await ebayClientFor(context)).searchReturns(data.offset ?? 0, data.filter));
+  .handler(async () => { throw new Error("Manage returns in eBay Seller Hub. Modern returns access has not been verified for this application."); });
 
 export const listEbayNotificationTopics = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .handler(async ({ context }: any) => new EbayNotificationService(await ebayClientFor(context)).topics());
+  .handler(async () => {
+    const { getEbayApplicationToken } = await import("./ebay/auth.server");
+    return new EbayNotificationService(new EbayRestClient(await getEbayApplicationToken())).topics();
+  });
 
 export const listEbayNotificationSubscriptions = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
@@ -450,9 +453,13 @@ export const createEbayNotificationSubscription = createServerFn({ method: "POST
   .handler(async ({ data, context }: any) => {
     const svc = new EbayNotificationService(await ebayClientFor(context));
     const sub = await svc.createSubscription(data.topicId, data.destinationId);
-    await context.supabase.from("ebay_notification_subscriptions").insert({
+    // Provider subscription was created as this authenticated user. Privileged
+    // persistence records only this user's returned provider ID.
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const saved = await supabaseAdmin.from("ebay_notification_subscriptions").upsert({
       user_id: context.userId, subscription_id: sub.subscriptionId, topic_id: sub.topicId, destination_id: sub.destinationId, status: sub.status || "active",
-    });
+    }, { onConflict: "user_id,topic_id" });
+    if (saved.error) throw new Error("eBay created the subscription, but saving failed. Refresh before retrying.");
     return sub;
   });
 
