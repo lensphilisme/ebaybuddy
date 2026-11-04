@@ -1,12 +1,18 @@
 // @ts-nocheck -- run with bun test
 import { describe, test, expect } from "bun:test";
 import { generateKeyPairSync, createSign } from "node:crypto";
-import { requireLiveOptimizer, requireListingIdentity } from "./optimizer-policy";
+import { requireLiveOptimizer, requireListingIdentity, hasFreshTraffic } from "./optimizer-policy";
 import { challengeResponse, verifyNotificationSignature } from "./notification-verification.server";
 import { campaignPayload } from "./marketing.server";
 import { EbayNotificationService } from "./notifications.server";
 
 describe("modern integration guardrails", () => {
+  test("optimizer rejects unavailable or stale traffic", () => {
+    const now = Date.parse("2026-11-04T12:00:00Z");
+    expect(hasFreshTraffic(null, now)).toBe(false);
+    expect(hasFreshTraffic("2026-11-02T12:00:00Z", now)).toBe(false);
+    expect(hasFreshTraffic("2026-11-04T11:00:00Z", now)).toBe(true);
+  });
   test("optimizer cannot apply changes without live permission", () => {
     expect(() => requireLiveOptimizer({ live_listing_enabled: false }, "token")).toThrow();
     expect(() => requireLiveOptimizer({ live_listing_enabled: true }, null)).toThrow();

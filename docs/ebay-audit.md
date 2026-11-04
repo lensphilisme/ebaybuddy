@@ -98,6 +98,21 @@ fields are preserved.
 - No database models were changed. All changes are code-only, so there
   are no migrations to run.
 
+## Current verification and corrections (2026-11-04)
+
+- Orders/disputes and promoted-campaign pages now exist with pagination, loading and reconnect errors. Paid campaign creation remains an explicit user action.
+- Corrected Notification API paths to `/commerce/notification/v1`; removed the invalid `sell.notification` OAuth scope. Subscription payloads use the topic's returned supported version. Requested topic names are not assumed to be available.
+- Added `/api/public/ebay/notifications` with challenge handling and eBay public-key signature verification. Unsigned requests return 401. Receipts are serialized and owned activity logs are checked before marking processed. No guessed stock changes or tracking writes are performed.
+- Fixed mixed published/unpublished offer pagination, thumbnail persistence and optimizer false-success. Stale traffic cannot trigger destructive optimizer changes.
+- CJ workspace forced renewal uses the workspace key; token-only per-user sessions are rejected.
+- Twenty local regression tests cover these rules. The app's latest build is clean.
+- Authenticated live checks found eBay refresh credentials invalid for the configured developer application; reconnect is necessary before orders, campaigns, listing sync or live optimizer execution can be verified.
+- Settings currently reports CJ disconnected for the tested account. A valid API-key connection is required to verify research/freight.
+- Ordinary returns are linked to eBay Seller Hub rather than calling legacy Post-Order APIs or inventing a GraphQL returns schema.
+- Inventory offers do **not** guarantee access to externally-created listings. Preserved local records remain available, but modern remote management requires Inventory ownership.
+
+## Historical notes below — not completion claims
+
 ## Still manual / to verify in Sandbox or Production
 1. Reconnect eBay once (new `sell.notification` scope) and reconnect CJ
    once with the API key only — old stored CJ tokens will no longer work

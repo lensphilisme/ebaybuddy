@@ -5,7 +5,7 @@ import { EbayRestClient } from "./ebay/rest.server";
 import { EbayOrderService, EbayReturnService } from "./ebay/orders.server";
 import { EbayNotificationService } from "./ebay/notifications.server";
 import { EbayMarketingService, campaignInput } from "./ebay/marketing.server";
-import { requireLiveOptimizer, requireListingIdentity } from "./ebay/optimizer-policy";
+import { requireLiveOptimizer, requireListingIdentity, hasFreshTraffic } from "./ebay/optimizer-policy";
 
 function cleanTitle(value: unknown) {
   return String(value ?? "")
@@ -353,6 +353,12 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
     for (const l of listings || []) {
       const listedAt = l.listed_at ? new Date(l.listed_at) : null;
       const ageDays = listedAt ? Math.floor((Date.now() - listedAt.getTime()) / 86400000) : 0;
+      // Inventory cannot refresh sales/views. Do not take destructive decisions
+      // from stale or unavailable measurements.
+      if (!hasFreshTraffic(l.last_traffic_check) && !/ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "")) {
+        actions.push({ id: l.id, title: l.title, action: "metrics_unavailable", detail: "Fresh sales and traffic measurements are required; no changes applied." });
+        continue;
+      }
       if (ageDays >= daysNoSales && (l.sales || 0) === 0) {
         const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: l.id, title: l.title, action: data.dryRun ? "end_recommended" : "ended", detail: `${ageDays}d no sales` };
         actions.push(action);
