@@ -14,6 +14,21 @@ beforeEach(() => {
 });
 
 describe("modern listings mapping", () => {
+  test("mixed pages never skip published offers at the batch boundary", async () => {
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("/offer?")) {
+        const offset = Number(new URL(String(url)).searchParams.get("offset"));
+        const all = [0,1,2,3].map((n) => ({ offerId: `o${n}`, sku: `s${n}`, status: n === 0 ? "UNPUBLISHED" : "PUBLISHED", marketplaceId: "EBAY_US", listing: n === 0 ? undefined : { listingId: String(n) } }));
+        return Response.json({ total: 4, offers: all.slice(offset, offset + 2) });
+      }
+      return Response.json(inventoryItem);
+    };
+    const first = await fetchPublishedOffersPage("fixture", 0, 2);
+    const second = await fetchPublishedOffersPage("fixture", first.nextOffset, 2);
+    expect(first.nextOffset).toBe(3);
+    expect([...first.items, ...second.items].map((item) => item.itemId)).toEqual(["1","2","3"]);
+    globalThis.fetch = realFetch;
+  });
   test("published offer joins to its inventory item; unpublished is skipped", async () => {
     let calls = 0;
     globalThis.fetch = (async (url: string) => {
