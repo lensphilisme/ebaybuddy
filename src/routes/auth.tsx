@@ -15,6 +15,10 @@ export const Route = createFileRoute("/auth")({
   head: () => ({
     meta: [
       { title: "Sign in — DropList" },
+      { property: "og:title", content: "Sign in — DropList" },
+      { property: "og:description", content: "Sign in to your CJ-to-eBay listing workspace." },
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
       { name: "description", content: "Sign in or create a DropList account to bulk-list CJ Dropshipping products to your eBay store." },
     ],
   }),

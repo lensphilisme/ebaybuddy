@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -9,10 +10,13 @@ import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DownloadCloud, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/listings")({ component: ListingsPage });
+export const Route = createFileRoute("/_authenticated/listings")({ head: () => pageHead("eBay listings", "Browse and sync Inventory-managed eBay listings."), component: ListingsPage });
 
 function ListingsPage() {
+  const [page, setPage] = useState(0);
   const syncFn = useServerFn(syncEbayListings);
   const { data = [], refetch, isLoading } = useQuery({ queryKey: ["ebay-listings"], queryFn: async () => {
     const { data, error } = await supabase.from("ebay_listings").select("*").order("listed_at", { ascending: false });
@@ -29,7 +33,7 @@ function ListingsPage() {
         <div className="overflow-x-auto">
           <Table>
             <TableHeader><TableRow><TableHead className="w-16" /><TableHead>Item</TableHead><TableHead className="hidden sm:table-cell">SKU</TableHead><TableHead>Price</TableHead><TableHead className="hidden md:table-cell">Sales</TableHead><TableHead className="hidden md:table-cell">Watch</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
-            <TableBody>{rows.map((l: any) => {
+            <TableBody>{rows.slice(page * 50, (page + 1) * 50).map((l: any) => {
               const img = Array.isArray(l.images) ? l.images[0] : l.image_url || l.thumbnail_url;
               return (
                 <TableRow key={l.id}>
@@ -47,5 +51,6 @@ function ListingsPage() {
         </div>
       )}
     </Card>
+    <div className="mt-4 flex items-center justify-between"><span className="text-sm text-muted-foreground">Page {page + 1} of {Math.max(1, Math.ceil(rows.length / 50))}</span><div className="flex gap-2"><Button variant="outline" size="icon" aria-label="Previous listings" disabled={page === 0} onClick={() => setPage(page - 1)}><ChevronLeft className="h-4 w-4" /></Button><Button variant="outline" size="icon" aria-label="Next listings" disabled={(page + 1) * 50 >= rows.length} onClick={() => setPage(page + 1)}><ChevronRight className="h-4 w-4" /></Button></div></div>
   </AppShell>;
 }

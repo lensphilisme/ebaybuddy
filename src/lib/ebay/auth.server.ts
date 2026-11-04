@@ -100,7 +100,15 @@ async function getFreshEbayTokenInner(supabase: any, userId: string) {
   const creds = await getUserEbayCredential(supabase, userId);
   if (creds.access_token && creds.expires_at && creds.expires_at > Date.now() + 60_000) return creds.access_token;
   if (!creds.refresh_token) throw new EbayAuthError("Reconnect eBay in Settings.");
-  const fresh = await refreshEbayAccessToken(creds.refresh_token);
+  let fresh: EbayCredential;
+  try { fresh = await refreshEbayAccessToken(creds.refresh_token); }
+  catch (error) {
+    if (error instanceof EbayAuthError) {
+      await supabase.from("integration_credentials").update({ is_active: false, last_error: "Reconnect your eBay seller account in Settings." }).eq("user_id", userId).eq("provider", "ebay").eq("label", "default");
+      throw new EbayAuthError("Your eBay connection has expired or belongs to a different developer application. Reconnect your seller account in Settings.");
+    }
+    throw error;
+  }
   const row = {
     user_id: userId,
     provider: "ebay",

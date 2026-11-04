@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useState, useMemo, useEffect } from "react";
@@ -14,7 +15,7 @@ import { Search, Loader2, ChevronLeft, ChevronRight, FileEdit } from "lucide-rea
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/products/")({
+export const Route = createFileRoute("/_authenticated/products/")({ head: () => pageHead("CJ product research", "Search CJ products, categories and warehouse inventory."),
   component: ProductsPage,
 });
 

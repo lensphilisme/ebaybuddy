@@ -6,3 +6,8 @@ export function requireLiveOptimizer(rule: { live_listing_enabled?: boolean } | 
 export function requireListingIdentity(itemId: unknown, resourceId: unknown) {
   if (!itemId || !resourceId) throw new Error("This listing is not managed by eBay Inventory. Re-sync before retrying; externally-created listings may be unavailable.");
 }
+
+export function hasFreshTraffic(checkedAt: unknown, now = Date.now()) {
+  const checked = Date.parse(String(checkedAt || ""));
+  return Number.isFinite(checked) && checked <= now && now - checked <= 86_400_000;
+}

@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
+      { property: "og:type", content: "website" },
+      { name: "twitter:card", content: "summary" },
       { title: "DropList — Bulk-list CJ Dropshipping products to eBay" },
       { name: "description", content: "Find winning CJ Dropshipping products, build optimized eBay drafts, and bulk-push to your eBay account with smart pricing and market research." },
       { property: "og:title", content: "DropList — Bulk-list CJ Dropshipping products to eBay" },

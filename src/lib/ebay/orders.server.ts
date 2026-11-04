@@ -29,13 +29,11 @@ export class EbayOrderService {
 
 export class EbayReturnService {
   constructor(private client: EbayRestClient) {}
-  /** Post-Order (Return) API search. Paginated; filter is passed through verbatim. */
+  /** Do not silently route ordinary returns through a legacy Post-Order API. */
   searchReturns(offset = 0, filter?: string) {
-    const query = new URLSearchParams({ limit: "50", offset: String(offset) });
-    if (filter) query.set("filter", filter);
-    return this.client.json<Page<{ returns: ReturnRecord[] }>>(`/post-order/v2/return/search?${query}`);
+    throw new Error("Modern returns access is not available for this application. Manage returns in eBay Seller Hub.");
   }
   returnById(returnId: string) {
-    return this.client.json<ReturnRecord>(`/post-order/v2/return/${encodeURIComponent(returnId)}`);
+    throw new Error("Manage this return in eBay Seller Hub; a supported modern return contract has not been verified.");
   }
 }

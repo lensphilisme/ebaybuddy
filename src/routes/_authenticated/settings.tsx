@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +13,7 @@ import { KeyRound, Boxes, Tag, ExternalLink } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/settings")({ component: SettingsPage });
+export const Route = createFileRoute("/_authenticated/settings")({ head: () => pageHead("Integration settings", "Connect your CJ API key and eBay seller account."), component: SettingsPage });
 
 function SettingsPage() {
   const [code, setCode] = useState("");

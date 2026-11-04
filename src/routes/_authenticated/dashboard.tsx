@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +9,7 @@ import { getIntegrationStatus } from "@/lib/cj.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { ArrowRight, Boxes, FileEdit, Tag, KeyRound, PackageSearch, TrendingUp } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/dashboard")({
+export const Route = createFileRoute("/_authenticated/dashboard")({ head: () => pageHead("Dashboard", "Your CJ-to-eBay listing pipeline, sales and activity."),
   component: DashboardPage,
 });
 
@@ -73,7 +74,7 @@ function DashboardPage() {
           <CardContent className="space-y-2">
             {(counts?.logs || []).length === 0 ? (
               <p className="text-sm text-muted-foreground">No activity yet. Sync eBay or push a draft to see events here.</p>
-            ) : counts!.logs.map((l: any) => (
+            ) : (counts?.logs || []).map((l: any) => (
               <div key={l.id} className="flex items-start gap-3 text-sm border-b border-border/60 last:border-0 py-2">
                 <span className={`mt-1 h-2 w-2 rounded-full shrink-0 ${l.level === "success" ? "bg-success" : l.level === "error" ? "bg-destructive" : "bg-muted-foreground"}`} />
                 <div className="flex-1">
