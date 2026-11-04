@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +9,7 @@ import { getIntegrationStatus } from "@/lib/cj.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { ArrowRight, Boxes, FileEdit, Tag, KeyRound, PackageSearch, TrendingUp } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/dashboard")({
+export const Route = createFileRoute("/_authenticated/dashboard")({ head: () => pageHead("Dashboard", "Your CJ-to-eBay listing pipeline, sales and activity."),
   component: DashboardPage,
 });
 

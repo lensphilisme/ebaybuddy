@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
@@ -12,6 +13,7 @@ import { toast } from "sonner";
 // If the user has a session in this tab we exchange the code automatically;
 // otherwise we surface the raw code so they can paste it in Settings.
 export const Route = createFileRoute("/ebay/callback")({
+  head: () => pageHead("eBay connection", "Complete your DropList eBay seller account connection."),
   component: EbayCallback,
   validateSearch: (s: Record<string, unknown>) => ({
     code: typeof s.code === "string" ? s.code : "",

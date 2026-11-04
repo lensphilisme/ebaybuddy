@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useQuery } from "@tanstack/react-query";
@@ -9,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Loader2, ScrollText } from "lucide-react";
 import { useMemo, useState } from "react";
 
-export const Route = createFileRoute("/_authenticated/logs")({ component: LogsPage });
+export const Route = createFileRoute("/_authenticated/logs")({ head: () => pageHead("Activity logs", "Review listing actions and integration errors."), component: LogsPage });
 
 type LogLevel = "success" | "info" | "warn" | "error";
 

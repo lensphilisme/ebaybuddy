@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useQuery, useMutation } from "@tanstack/react-query";
@@ -15,7 +16,7 @@ import { ArrowLeft, Loader2, Truck, FileEdit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/products/$pid")({
+export const Route = createFileRoute("/_authenticated/products/$pid")({ head: () => pageHead("CJ product details", "Inspect CJ variants, images and live freight pricing."),
   component: ProductDetailPage,
 });
 

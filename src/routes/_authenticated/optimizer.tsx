@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -12,7 +13,7 @@ import { LineChart, Play, Sparkles, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useState } from "react";
 
-export const Route = createFileRoute("/_authenticated/optimizer")({ component: OptimizerPage });
+export const Route = createFileRoute("/_authenticated/optimizer")({ head: () => pageHead("Listing optimizer", "Preview and apply eBay listing optimization rules."), component: OptimizerPage });
 
 function OptimizerPage() {
   const runFn = useServerFn(runOptimizerRules);

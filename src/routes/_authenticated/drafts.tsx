@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useEffect, useMemo, useState } from "react";
@@ -18,7 +19,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/drafts")({ component: DraftsPage });
+export const Route = createFileRoute("/_authenticated/drafts")({ head: () => pageHead("Listing drafts", "Edit and repair CJ-to-eBay listing drafts."), component: DraftsPage });
 
 function truncate(value: unknown, max = 20) {
   const text = String(value ?? "").trim();

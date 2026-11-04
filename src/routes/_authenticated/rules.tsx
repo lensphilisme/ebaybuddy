@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useState } from "react";
@@ -10,7 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/rules")({ component: RulesPage });
+export const Route = createFileRoute("/_authenticated/rules")({ head: () => pageHead("Automation rules", "Manage pricing and optimizer guardrails."), component: RulesPage });
 
 function RulesPage() {
   const { data: user } = useQuery({ queryKey: ["user"], queryFn: async () => (await supabase.auth.getUser()).data.user });

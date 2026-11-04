@@ -1,3 +1,4 @@
+import { pageHead } from "@/lib/page-head";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -12,7 +13,7 @@ import { toast } from "sonner";
 import { useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
-export const Route = createFileRoute("/_authenticated/listings")({ component: ListingsPage });
+export const Route = createFileRoute("/_authenticated/listings")({ head: () => pageHead("eBay listings", "Browse and sync Inventory-managed eBay listings."), component: ListingsPage });
 
 function ListingsPage() {
   const [page, setPage] = useState(0);
