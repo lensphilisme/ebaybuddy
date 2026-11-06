@@ -4,6 +4,8 @@ import { AppShell } from "@/components/app-shell";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getCjProduct, getCjFreight } from "@/lib/cj.functions";
+import { prepareMarketplaceListing } from "@/lib/marketplace.functions";
+import { getSavedMarketplaceLocationLabel } from "@/lib/marketplace-location";
 import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
-import { ArrowLeft, Loader2, Truck, FileEdit } from "lucide-react";
+import { ArrowLeft, Loader2, Truck, FileEdit, Store } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import DOMPurify from "dompurify";
@@ -47,6 +49,7 @@ function ProductDetailPage() {
   const { pid } = Route.useParams();
   const productFn = useServerFn(getCjProduct);
   const freightFn = useServerFn(getCjFreight);
+  const prepareMarketplaceFn = useServerFn(prepareMarketplaceListing);
   const navigate = useNavigate();
 
   const { data: p, isLoading, error } = useQuery({
@@ -186,6 +189,18 @@ function ProductDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // Facebook Marketplace (prepare only — the app never posts to Facebook;
+  // Muse posts the prepared listing from chat with an approval card).
+  // The server quotes the cheapest CJ freight, so no quote is needed here;
+  // the prepared price is the same final sell price the draft would carry.
+  const prepareMarketplace = useMutation({
+    mutationFn: async () => prepareMarketplaceFn({ data: { cjProductId: pid, locationLabel: getSavedMarketplaceLocationLabel() } }),
+    onSuccess: (row: any) => {
+      toast.success(`Prepared for Marketplace — ready to post: ${row?.title || ""} · $${Number(row?.price || 0).toFixed(2)}`);
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   return (
     <AppShell title={p?.productNameEn ?? "Product"} subtitle={p?.categoryName}>
       <div className="mb-4">
@@ -312,6 +327,9 @@ function ProductDetailPage() {
               {!hasQuote && <p className="text-xs text-amber-600">Get a shipping quote first — the price needs real freight. The sell price above is an estimate with $0 shipping.</p>}
               <Button className="w-full" onClick={() => sendToDraft.mutate()} disabled={sendToDraft.isPending || !hasQuote} title={!hasQuote ? "Get a shipping quote first — the price needs real freight" : undefined}>
                 <FileEdit className="h-4 w-4 mr-1" /> {sendToDraft.isPending ? "Saving…" : "Send to Drafts"}
+              </Button>
+              <Button className="w-full" variant="outline" onClick={() => prepareMarketplace.mutate()} disabled={prepareMarketplace.isPending || isLoading} title="Prepare this product for Facebook Marketplace — the app only prepares it; Muse posts it from chat with your approval.">
+                <Store className="h-4 w-4 mr-1" /> {prepareMarketplace.isPending ? "Preparing…" : "Prepare for Marketplace"}
               </Button>
             </Card>
 

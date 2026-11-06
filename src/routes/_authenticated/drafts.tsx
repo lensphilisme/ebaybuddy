@@ -9,6 +9,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { optimizeDraftCopyWithAi, optimizeDraftWithAi, repairDraftForEbay } from "@/lib/ai.functions";
 import { aiDeepCategorySuggest, pushDraftsToEbay, suggestEbayCategories } from "@/lib/ebay.functions";
+import { prepareMarketplaceListing } from "@/lib/marketplace.functions";
+import { getSavedMarketplaceLocationLabel } from "@/lib/marketplace-location";
 import { supabase } from "@/integrations/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -173,6 +175,7 @@ function DraftsPage() {
   const suggestFn = useServerFn(suggestEbayCategories);
   const pushFn = useServerFn(pushDraftsToEbay);
   const aiCatFn = useServerFn(aiDeepCategorySuggest);
+  const prepareMarketplaceFn = useServerFn(prepareMarketplaceListing);
 
   const { data: drafts = [], refetch, isLoading } = useQuery({
     queryKey: ["listing-drafts"],
@@ -310,6 +313,14 @@ function DraftsPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // Facebook Marketplace (prepare only — the app never posts to Facebook;
+  // Muse posts the prepared listing from chat with an approval card).
+  const prepareMarketplace = useMutation({
+    mutationFn: async (draftId: string) => prepareMarketplaceFn({ data: { draftId, locationLabel: getSavedMarketplaceLocationLabel() } }),
+    onSuccess: () => { toast.success("Prepared for Marketplace — ready to post"); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
   async function updateDraft(id: string, patch: any) {
     const { error } = await supabase.from("listing_drafts").update(patch).eq("id", id);
     if (error) toast.error(error.message); else refetch();
@@ -393,6 +404,7 @@ function DraftsPage() {
                             <DropdownMenuItem onClick={() => repair.mutate([d.id])} title="Repairs this draft's title, description, images and item specifics from CJ data. Use it when a push failed or a draft is missing fields.">Repair for eBay</DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem disabled={!!blocker} title={blocker || undefined} onClick={() => setConfirmPushIds([d.id])}>Push to eBay</DropdownMenuItem>
+                            <DropdownMenuItem disabled={prepareMarketplace.isPending} onClick={() => prepareMarketplace.mutate(d.id)}>Prepare for Marketplace</DropdownMenuItem>
                             <DropdownMenuItem className="text-destructive" onClick={() => setConfirmDeleteIds([d.id])}>Delete draft</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>

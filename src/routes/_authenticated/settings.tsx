@@ -4,13 +4,15 @@ import { AppShell } from "@/components/app-shell";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { connectEbayWithCode, getEbayConnectUrl, disconnectEbay, listEbayNotificationTopics, listEbayNotificationSubscriptions, createEbayNotificationSubscription } from "@/lib/ebay.functions";
 import { saveCjApiKey, getIntegrationStatus, disconnectCj } from "@/lib/cj.functions";
 import { saveAiProvider, removeAiProvider, getAiProviderStatus, testAiProvider } from "@/lib/ai-provider.functions";
+import { getSavedMarketplaceLocationLabel, saveMarketplaceLocationLabel, MARKETPLACE_LOCATION_DEFAULT_COORDS } from "@/lib/marketplace-location";
 import { supabase } from "@/integrations/supabase/client";
-import { KeyRound, Boxes, Tag, ExternalLink, Bell } from "lucide-react";
+import { KeyRound, Boxes, Tag, ExternalLink, Bell, Store } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -28,6 +30,9 @@ function SettingsPage() {
   const [notifTopic, setNotifTopic] = useState("");
   const [confirmDisconnect, setConfirmDisconnect] = useState<"cj" | "ebay" | null>(null);
   const [aiKeyTest, setAiKeyTest] = useState<"ok" | "invalid" | null>(null);
+  // Marketplace location (browser only — no settings table exists to hold
+  // it, so it lives in localStorage; the prepare step reads it).
+  const [marketplaceLocation, setMarketplaceLocation] = useState(() => getSavedMarketplaceLocationLabel());
   const urlFn = useServerFn(getEbayConnectUrl);
   const connectFn = useServerFn(connectEbayWithCode);
   const disconnectEbayFn = useServerFn(disconnectEbay);
@@ -249,6 +254,55 @@ function SettingsPage() {
               ) : null}
               Your key is tested live, saved server-side, and never shown again. Prices change — check the provider's pricing page.
             </p>
+          </div>
+        </IntegrationCard>
+
+        {/* Facebook Marketplace: the app PREPARES listings, Muse POSTS them.
+            The app cannot check the Facebook connection (no Facebook API
+            access from Vercel) and never posts itself — the card links the
+            connect page and holds the posting location. */}
+        <IntegrationCard
+          icon={Store}
+          title="Facebook Marketplace"
+          desc="Prepare listings on the Marketplace page, then ask Muse in chat to post them. Each post shows you an approval first."
+          status="Connect in chat"
+          ready={false}
+        >
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              <Button asChild variant="outline">
+                <a href="https://agent.meta.ai/foa_ac_link/facebook" target="_blank" rel="noreferrer">
+                  Connect Facebook <ExternalLink className="h-3 w-3 ml-1" />
+                </a>
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Connect once so Muse can post your Marketplace listings. Facebook posting is per item (no bulk API), and the app itself never posts to Facebook — Muse posts from chat, one listing at a time, with your approval.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Connection is checked by Muse in chat — if you connected Facebook, Muse can post your prepared listings.
+            </p>
+            <div>
+              <Label className="text-xs text-muted-foreground">Marketplace location (city, ZIP)</Label>
+              <div className="flex gap-2 mt-1">
+                <Input
+                  aria-label="Marketplace location"
+                  value={marketplaceLocation}
+                  onChange={(e) => setMarketplaceLocation(e.target.value)}
+                  placeholder="Jacksonville, FL"
+                  className="min-w-0 flex-1"
+                />
+                <Button
+                  variant="outline"
+                  onClick={() => { saveMarketplaceLocationLabel(marketplaceLocation); toast.success(`Marketplace location saved: ${marketplaceLocation.trim() || "Jacksonville, FL"}`); }}
+                >
+                  Save
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Listings are posted from this area. Coordinates default to Jacksonville ({MARKETPLACE_LOCATION_DEFAULT_COORDS.latitude}, {MARKETPLACE_LOCATION_DEFAULT_COORDS.longitude}) — update the ZIP for a precise location.
+              </p>
+            </div>
           </div>
         </IntegrationCard>
       </div>

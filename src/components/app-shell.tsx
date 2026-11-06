@@ -10,6 +10,7 @@ import {
   LogOut,
   ShoppingBag,
   Megaphone,
+  Store,
 } from "lucide-react";
 import { type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -23,6 +24,7 @@ const NAV = [
   { to: "/products", label: "CJ Products", short: "Products", icon: PackageSearch },
   { to: "/drafts", label: "Drafts", short: "Drafts", icon: FileEdit },
   { to: "/listings", label: "Listings", short: "Listings", icon: Tag },
+  { to: "/marketplace", label: "Marketplace", short: "Market", icon: Store },
   { to: "/optimizer", label: "Optimizer", short: "Optimizer", icon: LineChart },
   { to: "/orders", label: "Orders", short: "Orders", icon: ShoppingBag },
   { to: "/marketing", label: "Marketing", short: "Marketing", icon: Megaphone },

@@ -17,6 +17,7 @@ import { Route as AuthenticatedDashboardRouteImport } from './routes/_authentica
 import { Route as AuthenticatedDraftsRouteImport } from './routes/_authenticated/drafts'
 import { Route as AuthenticatedListingsRouteImport } from './routes/_authenticated/listings'
 import { Route as AuthenticatedMarketingRouteImport } from './routes/_authenticated/marketing'
+import { Route as AuthenticatedMarketplaceRouteImport } from './routes/_authenticated/marketplace'
 import { Route as AuthenticatedOptimizerRouteImport } from './routes/_authenticated/optimizer'
 import { Route as AuthenticatedOrdersRouteImport } from './routes/_authenticated/orders'
 import { Route as AuthenticatedRulesRouteImport } from './routes/_authenticated/rules'
@@ -65,6 +66,12 @@ const AuthenticatedMarketingRoute = AuthenticatedMarketingRouteImport.update({
   path: '/marketing',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedMarketplaceRoute =
+  AuthenticatedMarketplaceRouteImport.update({
+    id: '/marketplace',
+    path: '/marketplace',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedOptimizerRoute = AuthenticatedOptimizerRouteImport.update({
   id: '/optimizer',
   path: '/optimizer',
@@ -117,6 +124,7 @@ export interface FileRoutesByFullPath {
   '/drafts': typeof AuthenticatedDraftsRoute
   '/listings': typeof AuthenticatedListingsRoute
   '/marketing': typeof AuthenticatedMarketingRoute
+  '/marketplace': typeof AuthenticatedMarketplaceRoute
   '/optimizer': typeof AuthenticatedOptimizerRoute
   '/orders': typeof AuthenticatedOrdersRoute
   '/rules': typeof AuthenticatedRulesRoute
@@ -134,6 +142,7 @@ export interface FileRoutesByTo {
   '/drafts': typeof AuthenticatedDraftsRoute
   '/listings': typeof AuthenticatedListingsRoute
   '/marketing': typeof AuthenticatedMarketingRoute
+  '/marketplace': typeof AuthenticatedMarketplaceRoute
   '/optimizer': typeof AuthenticatedOptimizerRoute
   '/orders': typeof AuthenticatedOrdersRoute
   '/rules': typeof AuthenticatedRulesRoute
@@ -153,6 +162,7 @@ export interface FileRoutesById {
   '/_authenticated/drafts': typeof AuthenticatedDraftsRoute
   '/_authenticated/listings': typeof AuthenticatedListingsRoute
   '/_authenticated/marketing': typeof AuthenticatedMarketingRoute
+  '/_authenticated/marketplace': typeof AuthenticatedMarketplaceRoute
   '/_authenticated/optimizer': typeof AuthenticatedOptimizerRoute
   '/_authenticated/orders': typeof AuthenticatedOrdersRoute
   '/_authenticated/rules': typeof AuthenticatedRulesRoute
@@ -172,6 +182,7 @@ export interface FileRouteTypes {
     | '/drafts'
     | '/listings'
     | '/marketing'
+    | '/marketplace'
     | '/optimizer'
     | '/orders'
     | '/rules'
@@ -189,6 +200,7 @@ export interface FileRouteTypes {
     | '/drafts'
     | '/listings'
     | '/marketing'
+    | '/marketplace'
     | '/optimizer'
     | '/orders'
     | '/rules'
@@ -207,6 +219,7 @@ export interface FileRouteTypes {
     | '/_authenticated/drafts'
     | '/_authenticated/listings'
     | '/_authenticated/marketing'
+    | '/_authenticated/marketplace'
     | '/_authenticated/optimizer'
     | '/_authenticated/orders'
     | '/_authenticated/rules'
@@ -284,6 +297,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedMarketingRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/_authenticated/marketplace': {
+      id: '/_authenticated/marketplace'
+      path: '/marketplace'
+      fullPath: '/marketplace'
+      preLoaderRoute: typeof AuthenticatedMarketplaceRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
     '/_authenticated/optimizer': {
       id: '/_authenticated/optimizer'
       path: '/optimizer'
@@ -348,6 +368,7 @@ interface AuthenticatedRouteRouteChildren {
   AuthenticatedDraftsRoute: typeof AuthenticatedDraftsRoute
   AuthenticatedListingsRoute: typeof AuthenticatedListingsRoute
   AuthenticatedMarketingRoute: typeof AuthenticatedMarketingRoute
+  AuthenticatedMarketplaceRoute: typeof AuthenticatedMarketplaceRoute
   AuthenticatedOptimizerRoute: typeof AuthenticatedOptimizerRoute
   AuthenticatedOrdersRoute: typeof AuthenticatedOrdersRoute
   AuthenticatedRulesRoute: typeof AuthenticatedRulesRoute
@@ -361,6 +382,7 @@ const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDraftsRoute: AuthenticatedDraftsRoute,
   AuthenticatedListingsRoute: AuthenticatedListingsRoute,
   AuthenticatedMarketingRoute: AuthenticatedMarketingRoute,
+  AuthenticatedMarketplaceRoute: AuthenticatedMarketplaceRoute,
   AuthenticatedOptimizerRoute: AuthenticatedOptimizerRoute,
   AuthenticatedOrdersRoute: AuthenticatedOrdersRoute,
   AuthenticatedRulesRoute: AuthenticatedRulesRoute,

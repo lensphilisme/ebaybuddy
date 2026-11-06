@@ -463,6 +463,77 @@ export type Database = {
         }
         Relationships: []
       }
+      marketplace_listings: {
+        Row: {
+          cj_product_id: string | null
+          condition: string
+          created_at: string
+          description: string
+          fb_category: string
+          fb_listing_id: string | null
+          fb_listing_url: string | null
+          id: string
+          latitude: number | null
+          location_label: string | null
+          longitude: number | null
+          photos: string[]
+          price: number
+          source_draft_id: string | null
+          status: string
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          cj_product_id?: string | null
+          condition?: string
+          created_at?: string
+          description?: string
+          fb_category?: string
+          fb_listing_id?: string | null
+          fb_listing_url?: string | null
+          id?: string
+          latitude?: number | null
+          location_label?: string | null
+          longitude?: number | null
+          photos?: string[]
+          price?: number
+          source_draft_id?: string | null
+          status?: string
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          cj_product_id?: string | null
+          condition?: string
+          created_at?: string
+          description?: string
+          fb_category?: string
+          fb_listing_id?: string | null
+          fb_listing_url?: string | null
+          id?: string
+          latitude?: number | null
+          location_label?: string | null
+          longitude?: number | null
+          photos?: string[]
+          price?: number
+          source_draft_id?: string | null
+          status?: string
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "marketplace_listings_source_draft_id_fkey"
+            columns: ["source_draft_id"]
+            isOneToOne: false
+            referencedRelation: "listing_drafts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_url: string | null
