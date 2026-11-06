@@ -6,7 +6,6 @@ import {
   Tag,
   LineChart,
   Settings2,
-  ScrollText,
   Sliders,
   LogOut,
   Bell,
@@ -29,7 +28,6 @@ const NAV = [
   { to: "/orders", label: "Orders", icon: ShoppingBag },
   { to: "/marketing", label: "Marketing", icon: Megaphone },
   { to: "/rules", label: "Rules", icon: Sliders },
-  { to: "/logs", label: "Logs", icon: ScrollText },
   { to: "/settings", label: "Settings", icon: Settings2 },
 ] as const;
 
@@ -102,8 +100,8 @@ export function AppShell({ children, title, subtitle, actions }: {
           </div>
           <div className="ml-auto flex items-center gap-2">
             {actions}
-            <Button variant="ghost" size="icon" aria-label="Notifications">
-              <Bell className="h-4 w-4" />
+            <Button asChild variant="ghost" size="icon" aria-label="Notifications">
+              <Link to="/settings" hash="notifications"><Bell className="h-4 w-4" /></Link>
             </Button>
           </div>
         </header>
@@ -122,7 +120,7 @@ export function AppShell({ children, title, subtitle, actions }: {
           return (
             <Link key={item.to} to={item.to} className={cn("flex min-w-[68px] flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[10px] font-semibold transition", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}>
               <Icon className="h-4 w-4" />
-              <span className="truncate">{item.label.replace("CJ ", "")}</span>
+              <span className="truncate">{item.label}</span>
             </Link>
           );
         })}

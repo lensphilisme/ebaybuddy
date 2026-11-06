@@ -85,16 +85,34 @@ export async function reviseEbayListingText(
     );
   }
   const client = new EbayRestClient(accessToken);
-  const existing = await client.json<InventoryRecord>(
-    `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
-  );
-  const body = {
-    ...existing,
-    product: { ...(existing.product || {}), title: safe, ...(description ? { description } : {}) },
-  };
-  await client.response(`/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
+  let existing: InventoryRecord | null = null;
+  try {
+    existing = await client.json<InventoryRecord>(
+      `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+    );
+  } catch (e) {
+    // A multi-variant listing has no single inventory item under the base
+    // SKU — its title lives on the inventory item GROUP instead. Fall back
+    // to revising the group (group key is deterministic from the SKU).
+    if (!/404|not found/i.test(e instanceof Error ? e.message : String(e))) throw e;
+  }
+  if (existing) {
+    const body = {
+      ...existing,
+      product: { ...(existing.product || {}), title: safe, ...(description ? { description } : {}) },
+    };
+    await client.response(`/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    return { itemId, title: safe };
+  }
+  const { variantGroupKeyFor } = await import("./inventory.server");
+  const groupKey = variantGroupKeyFor(sku, undefined);
+  const group = await client.json<any>(`/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`);
+  await client.response(`/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`, {
     method: "PUT",
-    body: JSON.stringify(body),
+    body: JSON.stringify({ ...group, title: safe, ...(description ? { description } : {}) }),
   });
   return { itemId, title: safe };
 }
@@ -115,4 +133,38 @@ export async function endEbayFixedPriceListing(
     method: "POST",
   });
   return { itemId, ended: true };
+}
+
+/**
+ * End a listing the way the Inventory API requires for its shape.
+ * Multi-variant listings are one eBay item backed by a variant group:
+ * withdrawing a single variant offer would leave the rest live, so the
+ * group is withdrawn as a whole (POST offer/withdraw_by_inventory_item_group).
+ * Single-variant listings fall back to withdrawing their one offer.
+ * `row` is the stored ebay_listings row (sku + cj_product_id re-derive the
+ * deterministic group key — see variantGroupKeyFor).
+ */
+export async function endEbayListingRow(
+  accessToken: string,
+  row: { ebay_item_id?: string | null; ebay_offer_id?: string | null; sku?: string | null; cj_product_id?: string | null },
+): Promise<{ itemId: string; ended: boolean }> {
+  const itemId = row.ebay_item_id || "";
+  const client = new EbayRestClient(accessToken);
+  const { variantGroupKeyFor } = await import("./inventory.server");
+  const groupKey = variantGroupKeyFor(row.sku || undefined, row.cj_product_id || undefined);
+  let isGroup = false;
+  try {
+    await client.json(`/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`);
+    isGroup = true;
+  } catch {
+    isGroup = false;
+  }
+  if (isGroup) {
+    await client.response(`/sell/inventory/v1/offer/withdraw_by_inventory_item_group`, {
+      method: "POST",
+      body: JSON.stringify({ inventoryItemGroupKey: groupKey, marketplaceId: "EBAY_US" }),
+    });
+    return { itemId, ended: true };
+  }
+  return endEbayFixedPriceListing(accessToken, itemId, "NotAvailable", row.ebay_offer_id || undefined);
 }

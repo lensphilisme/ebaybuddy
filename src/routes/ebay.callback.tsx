@@ -24,7 +24,7 @@ export const Route = createFileRoute("/ebay/callback")({
 });
 
 function EbayCallback() {
-  const { code, error, error_description } = Route.useSearch();
+  const { code, state, error, error_description } = Route.useSearch();
   const connect = useServerFn(connectEbayWithCode);
   const navigate = useNavigate();
   const [status, setStatus] = useState<"idle" | "checking" | "saving" | "saved" | "manual" | "error">("idle");
@@ -48,9 +48,16 @@ function EbayCallback() {
         setStatus("manual");
         return;
       }
+      // `state` is the user id that started the OAuth flow in Settings —
+      // reject the callback if this browser is signed in as someone else.
+      if (state && state !== data.user.id) {
+        setStatus("error");
+        setMessage("eBay sign-in was started for a different account. Start the connection again from Settings.");
+        return;
+      }
       try {
         setStatus("saving");
-        await connect({ data: { code } });
+        await connect({ data: { code, state } });
         setStatus("saved");
         setTimeout(() => navigate({ to: "/settings" }), 1500);
       } catch (e) {
@@ -58,7 +65,7 @@ function EbayCallback() {
         setMessage(e instanceof Error ? e.message : String(e));
       }
     })();
-  }, [code, error, error_description, connect, navigate]);
+  }, [code, state, error, error_description, connect, navigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background to-muted/30">

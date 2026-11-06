@@ -394,14 +394,22 @@ async function createOrUpdateOffer(accessToken: string, offerBody: any) {
   return offerId!;
 }
 
+/** The Inventory API group key for a multi-variant draft. Deterministic from
+ * the draft SKU so the group can be found again later (e.g. to end or
+ * revise a variant listing) without storing an extra column. */
+export function variantGroupKeyFor(sku: string | undefined, cjProductId: string | undefined) {
+  return `${sku || cjProductId}-grp`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 50);
+}
+
 async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[], aspectCatalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
   const axes = safeVariationAxes(draft, variants[0], aspectCatalog);
   const optionsByVariant = uniqueVariationOptions(variants, axes);
-  const groupKey = `${draft.sku || draft.cj_product_id}-grp`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 50);
+  const groupKey = variantGroupKeyFor(draft.sku, draft.cj_product_id);
   const baseImages = normalizeImageUrls(draft.images);
   const allImages = normalizeImageUrls(baseImages, variants.map((v) => v.variantImage || v.image));
   if (allImages.length === 0) throw new Error("eBay requires at least one valid http(s) image URL before publishing variants.");
   const variantSKUs: string[] = [];
+  const variantOfferIds: string[] = [];
   const specifications = axes.map((axis) => ({ name: axis, values: Array.from(new Set(optionsByVariant.map((options) => options[axis]).filter(Boolean))).slice(0, 60) }));
   const imageAxis = axes.find((a) => /color|colour|style|pattern/i.test(a)) || axes[0];
 
@@ -415,7 +423,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
     for (const [k, v] of Object.entries(optionAspects)) if (v) aspects[k] = [String(v).slice(0, 65)];
     await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
     const variantPrice = priceNumber(variant.price ?? variant.variantSellPrice) || priceNumber(draft.price);
-    await createOrUpdateOffer(accessToken, stripEmpty({
+    const variantOfferId = await createOrUpdateOffer(accessToken, stripEmpty({
       sku,
       marketplaceId: "EBAY_US",
       format: "FIXED_PRICE",
@@ -426,6 +434,10 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
       listingPolicies: policies,
       pricingSummary: { price: { value: String(Number(variantPrice || draft.price || 0).toFixed(2)), currency: "USD" } },
     }));
+    // Keep every variant offer ID: the listing is one eBay item, but the
+    // Inventory API manages it as one offer per variant SKU. The first one
+    // is stored as ebay_offer_id so optimizer/revise have an identity.
+    variantOfferIds.push(variantOfferId);
   }
 
   const groupBody = {
@@ -450,7 +462,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   });
   const publishJson = await publish.json().catch(() => ({}));
   if (!publish.ok) throw new Error(`eBay variation publish failed: ${publishJson.errors?.[0]?.longMessage || publishJson.errors?.[0]?.message || publishJson.message || JSON.stringify(publishJson)}`);
-  return { offerId: null, listingId: publishJson.listingId, inventoryItemGroupKey: groupKey };
+  return { offerId: variantOfferIds[0] || null, offerIds: variantOfferIds, listingId: publishJson.listingId, inventoryItemGroupKey: groupKey };
 }
 
 export async function publishInventoryItem(accessToken: string, draft: any) {

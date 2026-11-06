@@ -1,18 +1,17 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { ArrowRight, Boxes, ShieldCheck, Sparkles, TrendingUp, Zap } from "lucide-react";
+import { ArrowRight, Boxes, Gauge, LineChart, ShieldCheck, Sparkles, Zap } from "lucide-react";
 import { BrandLogo } from "@/components/brand-logo";
 import { Button } from "@/components/ui/button";
-import homeProducts from "@/assets/home-products.jpg";
 
 export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
-      { title: "DropList — Your CJ-to-eBay selling workspace" },
-      { name: "description", content: "Discover CJ products, prepare optimized drafts and publish to your own eBay account with DropList." },
-      { property: "og:title", content: "DropList — Your CJ-to-eBay selling workspace" },
-      { property: "og:description", content: "Discover CJ products, prepare optimized drafts and publish to your own eBay account with DropList." },
       { property: "og:type", content: "website" },
-      { name: "twitter:card", content: "summary_large_image" },
+      { name: "twitter:card", content: "summary" },
+      { title: "DropList — Bulk-list CJ Dropshipping products to eBay" },
+      { name: "description", content: "Find winning CJ Dropshipping products, build optimized eBay drafts, and bulk-push to your eBay account with smart pricing and market research." },
+      { property: "og:title", content: "DropList — Bulk-list CJ Dropshipping products to eBay" },
+      { property: "og:description", content: "Find winning CJ Dropshipping products, build optimized eBay drafts, and bulk-push to your eBay account with smart pricing and market research." },
     ],
   }),
   component: Landing,
@@ -20,50 +19,109 @@ export const Route = createFileRoute("/")({
 
 function Landing() {
   return (
-    <div className="home-screen bg-background text-foreground">
-      <header className="home-header border-b border-border">
-        <Link to="/" aria-label="DropList home" className="min-w-0"><BrandLogo /></Link>
-        <nav aria-label="Account" className="flex shrink-0 items-center gap-2">
-          <Button asChild variant="ghost" size="sm"><Link to="/auth">Sign in</Link></Button>
-          <Button asChild size="sm"><Link to="/auth">Get started <ArrowRight /></Link></Button>
-        </nav>
+    <div className="min-h-screen bg-background">
+      <header className="border-b border-border bg-card/60 backdrop-blur sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+          <Link to="/"><BrandLogo /></Link>
+          <nav className="flex items-center gap-2">
+            <Button asChild variant="ghost"><Link to="/auth">Sign in</Link></Button>
+            <Button asChild><Link to="/auth">Get started</Link></Button>
+          </nav>
+        </div>
       </header>
 
-      <main className="home-main">
-        <section className="home-hero" aria-labelledby="home-title">
-          <img src={homeProducts} alt="Headphones, a lamp, a bottle and clothing beside a shipping box" width={1536} height={1024} className="home-photo" />
-          <div className="home-image-shade" />
-          <div className="home-copy">
-            <div className="home-eyebrow"><span className="home-status-dot" /> CJ DROPSHIPPING <ArrowRight className="h-3 w-3" /> EBAY</div>
-            <h1 id="home-title">DropList<span>Your next listing.<br />Your next opportunity.</span></h1>
-            <p className="home-description">Discover products. Price for profit.<br />Make them yours on eBay.</p>
-            <div className="home-cta">
-              <Button asChild size="lg" className="bg-accent text-accent-foreground hover:bg-accent/90"><Link to="/auth">Start listing <ArrowRight /></Link></Button>
-              <span className="home-security"><ShieldCheck className="h-4 w-4 shrink-0" /> Your account. Your business.</span>
+      <section className="relative overflow-hidden" style={{ background: "var(--gradient-hero)" }}>
+        <div className="max-w-7xl mx-auto px-6 py-20 lg:py-28 grid lg:grid-cols-2 gap-12 items-center">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-3 py-1 text-xs font-medium text-muted-foreground mb-6">
+              <Sparkles className="h-3.5 w-3.5 text-[var(--brand-blue)]" />
+              CJ Dropshipping → eBay, automated
+            </div>
+            <h1 className="text-4xl lg:text-6xl font-extrabold tracking-tight leading-[1.05]">
+              List smarter on eBay.
+              <span className="block text-transparent bg-clip-text" style={{ backgroundImage: "var(--gradient-brand)" }}>
+                Sell faster.
+              </span>
+            </h1>
+            <p className="mt-6 text-lg text-muted-foreground max-w-xl">
+              DropList fetches CJ Dropshipping products, builds eBay-ready drafts with smart pricing
+              and real market research, then bulk-pushes them to your eBay account — and keeps
+              optimizing after they go live.
+            </p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Button asChild size="lg" className="gap-2">
+                <Link to="/auth">Start listing <ArrowRight className="h-4 w-4" /></Link>
+              </Button>
+              <Button asChild size="lg" variant="outline">
+                <Link to="/auth">Sign in</Link>
+              </Button>
+            </div>
+            <div className="mt-8 flex items-center gap-6 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1.5"><ShieldCheck className="h-4 w-4 text-[var(--brand-green)]" /> Your credentials stay encrypted, server-side</span>
             </div>
           </div>
-          <div className="home-photo-caption"><Boxes className="h-4 w-4" /><span>From discovery to your storefront.</span></div>
-        </section>
 
-        <section className="home-workflow" aria-label="Your selling workflow">
-          {[
-            { Icon: Boxes, label: "Discover", detail: "Find your next product", number: "01" },
-            { Icon: Sparkles, label: "Prepare", detail: "Make every listing count", number: "02" },
-            { Icon: TrendingUp, label: "Publish", detail: "Grow your eBay storefront", number: "03" },
-          ].map(({ Icon, label, detail, number }) => (
-            <Link key={label} to="/auth" className="home-step group">
-              <span className="home-step-number">{number}</span>
-              <Icon className="home-step-icon" />
-              <div className="min-w-0"><h2>{label}</h2><p>{detail}</p></div>
-              <ArrowRight className="home-step-arrow transition-transform group-hover:translate-x-1" />
-            </Link>
-          ))}
-        </section>
-      </main>
+          <div className="relative">
+            <div className="rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-elevated)]">
+              <div className="flex items-center justify-between mb-4">
+                <div className="text-sm font-semibold">Bulk draft preview</div>
+                <span className="text-xs rounded-full bg-muted text-muted-foreground px-2 py-0.5 font-medium">Sample data</span>
+              </div>
+              <div className="space-y-3">
+                {[
+                  { t: "Wireless Earbuds Pro X", p: "$24.99", m: "+38%" },
+                  { t: "LED Strip Lights 32ft RGB", p: "$15.49", m: "+42%" },
+                  { t: "Pet Grooming Vacuum Kit", p: "$59.99", m: "+31%" },
+                ].map((r) => (
+                  <div key={r.t} className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+                    <div>
+                      <div className="text-sm font-medium">{r.t}</div>
+                      <div className="text-xs text-muted-foreground">CJ → eBay US · Active rule set</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm font-semibold">{r.p}</div>
+                      <div className="text-xs text-success">{r.m}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-4 text-xs text-muted-foreground">Example products and prices — not live listings. Your own drafts appear here after you sign in.</p>
+            </div>
+          </div>
+        </div>
+      </section>
 
-      <footer className="home-footer text-muted-foreground">
-        <span className="flex items-center gap-1.5"><Zap className="h-3 w-3 text-primary" /> Built for independent sellers</span>
-        <span>Not affiliated with eBay or CJ Dropshipping.</span>
+      <section className="max-w-7xl mx-auto px-6 py-20 grid md:grid-cols-3 gap-6">
+        {[
+          { Icon: Boxes, t: "Fetch CJ inventory", d: "Search CJ Dropshipping by category, country, price, weight, ratings — cache only the winners." },
+          { Icon: Zap, t: "Bulk-list to eBay", d: "Generate optimized drafts, approve in one click, push to your eBay account via the Inventory API." },
+          { Icon: LineChart, t: "Optimize after launch", d: "Track views, clicks, sales and CJ stock; the optimizer recommends rewrites, price moves, or end." },
+        ].map(({ Icon, t, d }) => (
+          <div key={t} className="rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-card)]">
+            <div className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary"><Icon className="h-5 w-5" /></div>
+            <h3 className="mt-4 font-semibold text-lg">{t}</h3>
+            <p className="mt-2 text-sm text-muted-foreground">{d}</p>
+          </div>
+        ))}
+      </section>
+
+      <section className="border-t border-border bg-secondary/40">
+        <div className="max-w-7xl mx-auto px-6 py-16 flex flex-col items-center text-center gap-6">
+          <Gauge className="h-10 w-10 text-primary" />
+          <h2 className="text-3xl font-bold tracking-tight">Built for safe, profitable bulk listing.</h2>
+          <p className="max-w-2xl text-muted-foreground">
+            Pricing respects min profit, fee buffers, and rounded ladders. Drafts run duplicate checks
+            against your active listings. Live pushes are off until you flip the safety switch.
+          </p>
+          <Button asChild size="lg"><Link to="/auth">Create your workspace</Link></Button>
+        </div>
+      </section>
+
+      <footer className="border-t border-border">
+        <div className="max-w-7xl mx-auto px-6 py-8 flex flex-wrap items-center justify-between gap-4 text-sm text-muted-foreground">
+          <BrandLogo size="sm" />
+          <span>© {new Date().getFullYear()} DropList. Not affiliated with eBay or CJ Dropshipping.</span>
+        </div>
       </footer>
     </div>
   );

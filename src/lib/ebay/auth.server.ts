@@ -36,6 +36,12 @@ function basicAuth() {
   return Buffer.from(`${required("EBAY_CLIENT_ID")}:${required("EBAY_CLIENT_SECRET")}`).toString("base64");
 }
 
+// EBAY_RUNAME must be the RuName NAME itself (e.g.
+// "Lens_Chaedarson-LensChae-AIauto-mwwzkrko"), NOT the callback URL.
+// eBay's authorize endpoint validates redirect_uri against the RuName and
+// rejects a full URL with invalid_request; eBay maps the RuName to the
+// registered Auth Accepted URL server-side. Same value must be sent in
+// both the consent URL below and the token exchange.
 export function ebayConsentUrl(state: string) {
   const q = new URLSearchParams({
     client_id: required("EBAY_CLIENT_ID"),

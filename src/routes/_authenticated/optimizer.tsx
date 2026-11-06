@@ -3,13 +3,13 @@ import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { runOptimizerRules } from "@/lib/ebay.functions";
+import { runOptimizerRules, refreshEbayTraffic } from "@/lib/ebay.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { LineChart, Play, Sparkles, Loader2 } from "lucide-react";
+import { LineChart, Play, Sparkles, Loader2, RefreshCw, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { useState } from "react";
 
@@ -17,7 +17,12 @@ export const Route = createFileRoute("/_authenticated/optimizer")({ head: () => 
 
 function OptimizerPage() {
   const runFn = useServerFn(runOptimizerRules);
+  const trafficFn = useServerFn(refreshEbayTraffic);
   const [actions, setActions] = useState<any[]>([]);
+  // The last run's summary — drives the "Flagged to end" card and the
+  // dry-run vs applied label. Status "flagged_end" is never written to the
+  // database, so counting rows by it would always read 0.
+  const [lastRun, setLastRun] = useState<{ dryRun: boolean; flaggedEnd: number } | null>(null);
 
   const { data: listings = [], refetch } = useQuery({
     queryKey: ["ebay-listings-optimizer"],
@@ -27,14 +32,33 @@ function OptimizerPage() {
       return data || [];
     },
   });
+  const { data: rule } = useQuery({
+    queryKey: ["optimizer-rule"],
+    queryFn: async () => {
+      const { data } = await supabase.from("automation_rules").select("live_listing_enabled").maybeSingle();
+      return data;
+    },
+  });
+  const livePushOn = rule?.live_listing_enabled !== false;
 
   const run = useMutation({
     mutationFn: (dryRun: boolean) => runFn({ data: { dryRun } }),
     onSuccess: (rows: any[], dryRun) => {
       setActions(rows);
+      setLastRun({ dryRun, flaggedEnd: rows.filter((r: any) => r.action === "end_recommended" || r.action === "ended").length });
       const failed = rows.filter((row) => row.error).length;
       if (failed) toast.error(`${failed} action(s) failed; check the details below.`);
       else toast.success(`${dryRun ? "Preview" : "Applied"} · ${rows.length} action(s)`);
+      refetch();
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+
+  const traffic = useMutation({
+    mutationFn: () => trafficFn(),
+    onSuccess: (r: any) => {
+      if (r?.error) toast.error(`Traffic refresh failed: ${r.error}`);
+      else toast.success(`Traffic refreshed for ${r?.updated ?? 0} listing${(r?.updated ?? 0) === 1 ? "" : "s"}`);
       refetch();
     },
     onError: (e: Error) => toast.error(e.message),
@@ -49,7 +73,8 @@ function OptimizerPage() {
         </Card>
         <Card className="p-4">
           <div className="text-xs text-muted-foreground">Flagged to end</div>
-          <div className="text-2xl font-semibold">{listings.filter((l: any) => l.status === "flagged_end").length}</div>
+          <div className="text-2xl font-semibold">{lastRun ? lastRun.flaggedEnd : "—"}</div>
+          <div className="text-[11px] text-muted-foreground">{lastRun ? "from latest run" : "run a preview first"}</div>
         </Card>
         <Card className="p-4">
           <div className="text-xs text-muted-foreground">Total sales</div>
@@ -57,14 +82,32 @@ function OptimizerPage() {
         </Card>
       </div>
 
+      {!livePushOn && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-amber-600" />
+          <span><strong>Live Push is off</strong> in Rules — "Run now" is blocked until you enable it. Preview still works, and nothing is changed on eBay.</span>
+        </div>
+      )}
+
       <div className="flex flex-wrap gap-2 mb-4">
         <Button variant="outline" onClick={() => run.mutate(true)} disabled={run.isPending}>
           {run.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Sparkles className="h-4 w-4 mr-1" />} Preview AI actions
         </Button>
-        <Button onClick={() => run.mutate(false)} disabled={run.isPending}>
+        <Button onClick={() => run.mutate(false)} disabled={run.isPending || !livePushOn}>
           <Play className="h-4 w-4 mr-1" /> Run now
         </Button>
+        <Button variant="outline" onClick={() => traffic.mutate()} disabled={traffic.isPending}>
+          <RefreshCw className={`h-4 w-4 mr-1 ${traffic.isPending ? "animate-spin" : ""}`} /> Refresh traffic
+        </Button>
       </div>
+
+      {lastRun && actions.length > 0 && (
+        <div className="mb-3">
+          <Badge variant={lastRun.dryRun ? "secondary" : "default"}>
+            {lastRun.dryRun ? "Preview (dry run) — nothing was changed on eBay" : "Applied — changes are live on eBay"}
+          </Badge>
+        </div>
+      )}
 
       <Card className="overflow-hidden">
         {actions.length === 0 ? (

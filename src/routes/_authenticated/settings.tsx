@@ -6,13 +6,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { connectEbayWithCode, getEbayConnectUrl } from "@/lib/ebay.functions";
+import { connectEbayWithCode, getEbayConnectUrl, listEbayNotificationTopics, listEbayNotificationSubscriptions, createEbayNotificationSubscription } from "@/lib/ebay.functions";
 import { saveCjApiKey, getIntegrationStatus } from "@/lib/cj.functions";
 import { saveAiProvider, removeAiProvider, getAiProviderStatus } from "@/lib/ai-provider.functions";
 import { supabase } from "@/integrations/supabase/client";
-import { KeyRound, Boxes, Tag, ExternalLink } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { KeyRound, Boxes, Tag, ExternalLink, Bell } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 export const Route = createFileRoute("/_authenticated/settings")({ head: () => pageHead("Integration settings", "Connect your CJ API key and eBay seller account."), component: SettingsPage });
 
@@ -23,6 +24,7 @@ function SettingsPage() {
   const [aiModel, setAiModel] = useState("");
   const [aiKey, setAiKey] = useState("");
   const [aiBaseUrl, setAiBaseUrl] = useState("");
+  const [notifTopic, setNotifTopic] = useState("");
   const urlFn = useServerFn(getEbayConnectUrl);
   const connectFn = useServerFn(connectEbayWithCode);
   const cjSaveFn = useServerFn(saveCjApiKey);
@@ -30,6 +32,9 @@ function SettingsPage() {
   const aiSaveFn = useServerFn(saveAiProvider);
   const aiRemoveFn = useServerFn(removeAiProvider);
   const aiStatusFn = useServerFn(getAiProviderStatus);
+  const topicsFn = useServerFn(listEbayNotificationTopics);
+  const subsFn = useServerFn(listEbayNotificationSubscriptions);
+  const subscribeFn = useServerFn(createEbayNotificationSubscription);
 
   const { data: status, refetch } = useQuery({
     queryKey: ["integration-status"],
@@ -39,6 +44,28 @@ function SettingsPage() {
     queryKey: ["ai-provider-status"],
     queryFn: () => aiStatusFn(),
   });
+  const { data: topics, error: topicsError } = useQuery({
+    queryKey: ["ebay-notification-topics"],
+    queryFn: () => topicsFn(),
+    retry: false,
+  });
+  const { data: subs, refetch: refetchSubs, error: subsError } = useQuery({
+    queryKey: ["ebay-notification-subscriptions"],
+    queryFn: () => subsFn(),
+    retry: false,
+  });
+  const subscribe = useMutation({
+    mutationFn: () => subscribeFn({ data: { topicId: notifTopic } }),
+    onSuccess: (r: any) => { toast.success(`Subscribed to ${r.topicId}`); setNotifTopic(""); refetchSubs(); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const subscribedTopicIds = new Set((subs?.subscriptions || []).map((s: any) => s.topicId));
+  // The header bell links here with #notifications — scroll to the card.
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.location.hash === "#notifications") {
+      document.getElementById("notifications")?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, []);
   const ebayCred = { is_active: !!status?.ebay.connected, source: status?.ebay.source };
   const cjCred = { is_active: !!status?.cj.connected, source: status?.cj.source };
   const aiProviderMeta: Record<string, { label: string; defaultModel: string; keyUrl: string; hint: string }> = {
@@ -76,7 +103,7 @@ function SettingsPage() {
   });
 
   return (
-    <AppShell title="Settings" subtitle="Integrations, profile and workspace preferences">
+    <AppShell title="Settings" subtitle="Connect CJ, eBay and your AI provider">
       <div className="grid gap-4 lg:grid-cols-2">
         <IntegrationCard
           icon={Boxes}
@@ -102,7 +129,7 @@ function SettingsPage() {
         <IntegrationCard
           icon={Tag}
           title="eBay"
-          desc="Connect any seller account with eBay login. No per-user API keys, client secrets or refresh tokens are needed."
+          desc="Connect any seller account with eBay login. Your seller sign-in is stored server-side; the app's own eBay API keys live in the server settings, not here."
           status={ebayCred.is_active ? "Connected" : "Needs OAuth"}
           ready={ebayCred.is_active}
         >
@@ -140,16 +167,14 @@ function SettingsPage() {
         >
           <div className="space-y-2">
             <div className="flex gap-2">
-              <select
-                aria-label="AI provider"
-                className="flex h-10 rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={aiProvider}
-                onChange={(e) => { setAiProvider(e.target.value); setAiModel(""); }}
-              >
-                {Object.entries(aiProviderMeta).map(([id, meta]) => (
-                  <option key={id} value={id}>{meta.label}</option>
-                ))}
-              </select>
+              <Select value={aiProvider} onValueChange={(v) => { setAiProvider(v); setAiModel(""); }}>
+                <SelectTrigger aria-label="AI provider" className="w-56"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(aiProviderMeta).map(([id, meta]) => (
+                    <SelectItem key={id} value={id}>{meta.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Input
                 aria-label="AI model"
                 value={aiModel}
@@ -181,6 +206,57 @@ function SettingsPage() {
           </div>
         </IntegrationCard>
       </div>
+
+      <Card id="notifications" className="mt-4 shadow-[var(--shadow-card)]">
+        <CardHeader className="flex flex-row items-start gap-4 space-y-0">
+          <div className="h-10 w-10 rounded-lg bg-primary/10 text-primary flex items-center justify-center"><Bell className="h-5 w-5" /></div>
+          <div className="flex-1">
+            <CardTitle>eBay notifications</CardTitle>
+            <CardDescription className="mt-1">
+              eBay can push order, sale and return events to this app the moment they happen. The app receives them at its public webhook address; subscribing to a topic tells eBay to send that event here.
+            </CardDescription>
+          </div>
+          <span className="rounded-full bg-muted text-muted-foreground text-xs px-2 py-0.5 font-medium">{(subs?.subscriptions || []).length} subscribed</span>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {topicsError && <p className="text-sm text-destructive">Could not load eBay topics: {(topicsError as Error).message}</p>}
+          {subsError && <p className="text-sm text-destructive">Could not load your subscriptions: {(subsError as Error).message}</p>}
+          {(subs?.subscriptions || []).length > 0 && (
+            <div>
+              <div className="text-sm font-medium mb-2">Your subscriptions</div>
+              <ul className="space-y-1 text-sm">
+                {(subs?.subscriptions || []).map((s: any) => (
+                  <li key={s.subscriptionId} className="flex flex-wrap items-center gap-2">
+                    <span className="font-mono text-xs">{s.topicId}</span>
+                    <span className="rounded-full bg-success/10 text-success text-xs px-2 py-0.5 font-medium">{s.status || "ENABLED"}</span>
+                    <span className="text-xs text-muted-foreground">destination {s.destinationId}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <div>
+            <div className="text-sm font-medium mb-2">Subscribe to a topic</div>
+            <div className="flex gap-2">
+              <Select value={notifTopic} onValueChange={setNotifTopic}>
+                <SelectTrigger aria-label="Notification topic" className="flex-1"><SelectValue placeholder="Choose a topic" /></SelectTrigger>
+                <SelectContent>
+                  {(topics?.topics || []).map((t: any) => (
+                    <SelectItem key={t.topicId} value={t.topicId} disabled={t.status !== "ENABLED" || subscribedTopicIds.has(t.topicId)}>
+                      {t.topicId}{subscribedTopicIds.has(t.topicId) ? " — subscribed" : t.status !== "ENABLED" ? ` — ${t.status}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button onClick={() => subscribe.mutate()} disabled={!notifTopic || subscribe.isPending}>{subscribe.isPending ? "Subscribing…" : "Subscribe"}</Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Recommended first: MARKETPLACE_CHECKOUT_ORDER_CLOSED (a buyer checked out), ITEM_SOLD (a sale) and RETURN_CREATED (a return was opened).
+              Subscribing needs an eBay webhook destination pointing at this app — if it fails, create the destination in eBay first, then set its ID as EBAY_NOTIFICATION_DESTINATION_ID on the server.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
     </AppShell>
   );
 }

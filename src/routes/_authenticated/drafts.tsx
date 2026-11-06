@@ -1,7 +1,7 @@
 import { pageHead } from "@/lib/page-head";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { optimizeDraftCopyWithAi, optimizeDraftWithAi, repairDraftForEbay } from "@/lib/ai.functions";
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { AlertCircle, ChevronDown, FileEdit, Loader2, MoreHorizontal, Rocket, Search, Sparkles, Trash2, Wrench } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -21,9 +22,38 @@ import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/drafts")({ head: () => pageHead("Listing drafts", "Edit and repair CJ-to-eBay listing drafts."), component: DraftsPage });
 
-function truncate(value: unknown, max = 20) {
+function truncate(value: unknown, max = 60) {
   const text = String(value ?? "").trim();
   return text.length > max ? `${text.slice(0, max).trim()}…` : text;
+}
+
+/**
+ * Category ID input that saves debounced (600ms after the last keystroke)
+ * instead of firing one Supabase update + full list refetch per character.
+ */
+function CategoryInput({ draftId, value, onSave }: { draftId: string; value: string; onSave: (id: string, patch: any) => Promise<void> }) {
+  const [local, setLocal] = useState(value);
+  const [saving, setSaving] = useState(false);
+  // Stay in sync when the category changes elsewhere (e.g. "AI pick
+  // category" fills it in) instead of showing a stale value.
+  useEffect(() => { setLocal(value); }, [value]);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => { setLocal(value); }, [value]);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
+  function change(v: string) {
+    setLocal(v);
+    setSaving(true);
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => {
+      void onSave(draftId, { category_id: v }).finally(() => setSaving(false));
+    }, 600);
+  }
+  return (
+    <div className="relative">
+      <Input value={local} onChange={(e) => change(e.target.value)} placeholder="eBay category ID" className="h-8 text-xs pr-14" aria-label="eBay category ID" />
+      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">{saving ? "Saving…" : local ? "Saved" : ""}</span>
+    </div>
+  );
 }
 
 function variantCount(draft: any) {
@@ -43,6 +73,8 @@ function DraftsPage() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [suggestions, setSuggestions] = useState<Record<string, any[]>>({});
   const [editDraft, setEditDraft] = useState<any | null>(null);
+  const [confirmRepair, setConfirmRepair] = useState(false);
+  const [confirmDeleteIds, setConfirmDeleteIds] = useState<string[] | null>(null);
   const optimizeFn = useServerFn(optimizeDraftWithAi);
   const optimizeCopyFn = useServerFn(optimizeDraftCopyWithAi);
   const repairFn = useServerFn(repairDraftForEbay);
@@ -60,6 +92,12 @@ function DraftsPage() {
   });
   const selectedIds = useMemo(() => Object.keys(selected).filter((id) => selected[id]), [selected]);
   const failedIds = useMemo(() => drafts.filter((d: any) => d.status === "failed").map((d: any) => d.id), [drafts]);
+  // Push requires an eBay category per draft — the server marks category-less
+  // drafts failed, so block the button and say why instead of failing after.
+  const selectedMissingCategory = useMemo(
+    () => selectedIds.filter((id) => !drafts.find((d: any) => d.id === id)?.category_id),
+    [selectedIds, drafts],
+  );
 
   const optimize = useMutation({
     mutationFn: async (ids: string[]) => { for (const id of ids) await optimizeFn({ data: { draftId: id } }); },
@@ -123,10 +161,13 @@ function DraftsPage() {
         <Button size="sm" disabled={!selectedIds.length || optimize.isPending} onClick={() => optimize.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Fill</Button>
         <Button size="sm" disabled={!selectedIds.length || optimizeCopy.isPending} variant="outline" onClick={() => optimizeCopy.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Optimized</Button>
         <Button size="sm" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)}><Wrench className="h-4 w-4 mr-1" />Repair</Button>
-        <Button size="sm" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => repair.mutate(failedIds)}><Wrench className="h-4 w-4 mr-1" />Repair failed</Button>
-        <Button size="sm" disabled={!selectedIds.length || push.isPending} onClick={() => push.mutate(selectedIds)}><Rocket className="h-4 w-4 mr-1" />Push</Button>
-        <Button size="sm" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => bulkDelete.mutate(selectedIds)}><Trash2 className="h-4 w-4 mr-1" />Delete</Button>
+        <Button size="sm" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => setConfirmRepair(true)}><Wrench className="h-4 w-4 mr-1" />Repair failed</Button>
+        <Button size="sm" disabled={!selectedIds.length || push.isPending || selectedMissingCategory.length > 0} onClick={() => push.mutate(selectedIds)}><Rocket className="h-4 w-4 mr-1" />Push</Button>
+        <Button size="sm" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => setConfirmDeleteIds(selectedIds)}><Trash2 className="h-4 w-4 mr-1" />Delete</Button>
       </div>
+      {selectedMissingCategory.length > 0 && (
+        <p className="mb-3 text-xs text-amber-600">{selectedMissingCategory.length} selected draft{selectedMissingCategory.length === 1 ? "" : "s"} still need{selectedMissingCategory.length === 1 ? "s" : ""} an eBay category ID — expand the draft and use "AI pick category" or "eBay category suggest", then Push unlocks.</p>
+      )}
 
       <Card className="overflow-hidden border shadow-sm">
         {isLoading ? <div className="p-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : drafts.length === 0 ? (
@@ -143,7 +184,7 @@ function DraftsPage() {
                     <img src={image} alt={d.title || "Draft product"} className="h-12 w-12 rounded-md object-cover bg-muted" />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-semibold text-sm truncate">{truncate(d.title, 22)}</span>
+                        <span className="font-semibold text-sm line-clamp-2 leading-snug">{truncate(d.title)}</span>
                         {d.status === "failed" ? <StatusErrorPopover draft={d} /> : <Badge variant="secondary" className="shrink-0 text-[10px]">{d.status}</Badge>}
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
@@ -165,8 +206,8 @@ function DraftsPage() {
                           <DropdownMenuItem onClick={() => optimizeCopy.mutate([d.id])}>AI Optimized copy</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => repair.mutate([d.id])}>Repair for eBay</DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => push.mutate([d.id])}>Push to eBay</DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive" onClick={() => bulkDelete.mutate([d.id])}>Delete draft</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { if (!d.category_id) { toast.error("Add an eBay category ID first — expand the draft and use AI pick category or eBay suggest."); return; } push.mutate([d.id]); }}>Push to eBay</DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive" onClick={() => setConfirmDeleteIds([d.id])}>Delete draft</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
@@ -178,7 +219,7 @@ function DraftsPage() {
                         <div className="line-clamp-3 text-xs text-muted-foreground break-words">{d.description || "No description yet."}</div>
                       </div>
                       <div className="space-y-2">
-                        <Input value={d.category_id || ""} onChange={(e) => updateDraft(d.id, { category_id: e.target.value })} placeholder="eBay category ID" className="h-8 text-xs" />
+                        <CategoryInput draftId={d.id} value={d.category_id || ""} onSave={updateDraft} />
                         {suggestions[d.id]?.slice(0, 3).map((c) => <button key={c.categoryId} className="block w-full truncate text-left text-xs text-primary hover:underline" onClick={() => updateDraft(d.id, { category_id: c.categoryId })}>{c.path}</button>)}
                       </div>
                     </div>
@@ -189,6 +230,30 @@ function DraftsPage() {
           </div>
         )}
       </Card>
+      <AlertDialog open={confirmRepair} onOpenChange={setConfirmRepair}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Repair all {failedIds.length} failed draft{failedIds.length === 1 ? "" : "s"}?</AlertDialogTitle>
+            <AlertDialogDescription>Each failed draft is re-checked against CJ and eBay and its title, description, images and item specifics are rebuilt. Drafts that repair cleanly return to pending so you can push them again.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { setConfirmRepair(false); repair.mutate(failedIds); }}>Repair {failedIds.length} draft{failedIds.length === 1 ? "" : "s"}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={confirmDeleteIds !== null} onOpenChange={(open) => !open && setConfirmDeleteIds(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {confirmDeleteIds?.length ?? 0} draft{(confirmDeleteIds?.length ?? 0) === 1 ? "" : "s"}?</AlertDialogTitle>
+            <AlertDialogDescription>This permanently removes the selected draft{(confirmDeleteIds?.length ?? 0) === 1 ? "" : "s"} from the queue. Listings already pushed to eBay are not affected.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={() => { if (confirmDeleteIds) bulkDelete.mutate(confirmDeleteIds); setConfirmDeleteIds(null); }}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <EditDraftDialog draft={editDraft} onOpenChange={(open) => !open && setEditDraft(null)} onSaved={() => { setEditDraft(null); refetch(); }} />
     </AppShell>
   );

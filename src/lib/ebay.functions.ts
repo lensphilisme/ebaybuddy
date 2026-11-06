@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { ebayConsentUrl, exchangeEbayCode, fetchPublishedOffersPage, getCategorySuggestions, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayFixedPriceListing } from "./ebay.server";
+import { ebayConsentUrl, exchangeEbayCode, fetchPublishedOffersPage, getCategorySuggestions, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayListingRow } from "./ebay.server";
 import { EbayRestClient } from "./ebay/rest.server";
 import { EbayOrderService, EbayReturnService } from "./ebay/orders.server";
 import { EbayNotificationService } from "./ebay/notifications.server";
@@ -155,8 +155,16 @@ export const getEbayConnectUrl = createServerFn({ method: "POST" })
 
 export const connectEbayWithCode = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
-  .inputValidator((data: { code: string }) => data)
+  .inputValidator((data: { code: string; state?: string }) => data)
   .handler(async ({ data, context }: any) => {
+    // CSRF check: the callback's `state` is the user id that started the
+    // OAuth flow. When the caller passes it, it must match the signed-in
+    // user or the code is rejected. (The manual paste path in Settings
+    // passes no state — the user is already signed in and pastes their
+    // own code, so there is nothing to compare.)
+    if (data.state && data.state !== context.userId) {
+      throw new Error("eBay sign-in was started for a different account. Start the connection again from Settings.");
+    }
     const creds = await exchangeEbayCode(decodeURIComponent(data.code.trim()));
     const row = {
       user_id: context.userId,
@@ -179,12 +187,14 @@ export const syncEbayListings = createServerFn({ method: "POST" })
   .handler(async ({ data, context }: any) => {
     const token = await getFreshEbayToken(context.supabase, context.userId);
     // Modern Inventory API: 100 offers per page. The Inventory API does not
-    // expose quantitySold / watchCount, so sales/views are NEVER overwritten
-    // here — stored values are preserved and only price/title/stock refresh.
+    // expose quantitySold / watchCount, so sales/views are refreshed from
+    // the Analytics traffic report below — never guessed, never overwritten
+    // with zeros. Only price/title/stock refresh from the offers themselves.
     const perPage = Math.min(data.entriesPerPage ?? 100, 100);
     let offset = 0;
     let totalSynced = 0;
     let grandTotal = 0;
+    const syncedItemIds: string[] = [];
     while (true) {
       const result = await fetchPublishedOffersPage(token, offset, perPage);
       grandTotal = result.total;
@@ -211,13 +221,52 @@ export const syncEbayListings = createServerFn({ method: "POST" })
           if (duplicateIds.length) await context.supabase.from("ebay_listings").delete().in("id", duplicateIds);
         }
         else await context.supabase.from("ebay_listings").insert(row);
+        if (item.itemId) syncedItemIds.push(item.itemId);
       }
       totalSynced += result.items.length;
       if (offset >= grandTotal) break;
       if (offset > 10000) break; // safety cap
     }
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)`, metadata: { total: grandTotal, synced: totalSynced } });
-    return { total: grandTotal, synced: totalSynced };
+    // Real traffic (views/clicks/sales, last 30 days) from the Analytics API.
+    // Best-effort: a traffic failure must never fail the sync itself — the
+    // optimizer simply keeps reporting metrics_unavailable until it works.
+    let traffic: { updated: number; total: number; error?: string } = { updated: 0, total: 0 };
+    try {
+      const { refreshListingTraffic } = await import("./ebay/analytics.server");
+      traffic = await refreshListingTraffic(context.supabase, context.userId, token, syncedItemIds);
+    } catch (e) {
+      traffic = { updated: 0, total: syncedItemIds.length, error: e instanceof Error ? e.message : String(e) };
+    }
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)`, metadata: { total: grandTotal, synced: totalSynced, trafficUpdated: traffic.updated, trafficError: traffic.error || null } });
+    return { total: grandTotal, synced: totalSynced, trafficUpdated: traffic.updated, trafficError: traffic.error || null };
+  });
+
+// Refresh views/clicks/sales from the eBay Analytics traffic report without
+// re-syncing offers. Used by the Optimizer page so a stale traffic stamp
+// can be fixed on demand.
+export const refreshEbayTraffic = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }: any) => {
+    const token = await getFreshEbayToken(context.supabase, context.userId);
+    const { refreshListingTraffic } = await import("./ebay/analytics.server");
+    return refreshListingTraffic(context.supabase, context.userId, token);
+  });
+
+// End one listing from the Listings page. Variant listings are ended as a
+// group (see endEbayListingRow); single listings withdraw their offer.
+export const endEbayListing = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { listingId: string }) => data)
+  .handler(async ({ data, context }: any) => {
+    const token = await getFreshEbayToken(context.supabase, context.userId);
+    const { data: row, error } = await context.supabase.from("ebay_listings").select("*").eq("user_id", context.userId).eq("id", data.listingId).maybeSingle();
+    if (error || !row) throw new Error("Listing not found.");
+    requireListingIdentity(row.ebay_item_id, row.ebay_offer_id);
+    await endEbayListingRow(token, row);
+    const saved = await context.supabase.from("ebay_listings").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", row.id);
+    if (saved.error) throw new Error("eBay ended the listing, but saving failed. Re-sync listings.");
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "info", category: "ebay", message: `Ended eBay listing: ${row.title}`, metadata: { listingId: row.ebay_item_id } });
+    return { ok: true };
   });
 
 export const suggestEbayCategories = createServerFn({ method: "POST" })
@@ -345,10 +394,11 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
     for (const l of listings || []) {
       const listedAt = l.listed_at ? new Date(l.listed_at) : null;
       const ageDays = listedAt ? Math.floor((Date.now() - listedAt.getTime()) / 86400000) : 0;
-      // Inventory cannot refresh sales/views. Do not take destructive decisions
-      // from stale or unavailable measurements.
+      // Traffic comes from the Analytics report written during listing sync
+      // (see refreshListingTraffic). Do not take destructive decisions from
+      // stale or unavailable measurements.
       if (!hasFreshTraffic(l.last_traffic_check) && !/ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "")) {
-        actions.push({ id: l.id, title: l.title, action: "metrics_unavailable", detail: "Fresh sales and traffic measurements are required; no changes applied." });
+        actions.push({ id: l.id, title: l.title, action: "metrics_unavailable", detail: "No fresh traffic data (last 24h). Sync eBay listings or use Refresh traffic on this page, then run again — no changes applied." });
         continue;
       }
       if (ageDays >= daysNoSales && (l.sales || 0) === 0) {
@@ -358,7 +408,7 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
           try {
             requireListingIdentity(l.ebay_item_id, l.ebay_offer_id);
             if (!token) throw new Error("Reconnect eBay first.");
-            await endEbayFixedPriceListing(token, l.ebay_item_id, "NotAvailable", l.ebay_offer_id);
+            await endEbayListingRow(token, l);
             const saved = await context.supabase.from("ebay_listings").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", l.id);
             if (saved.error) throw new Error("eBay ended the listing, but saving failed. Re-sync listings.");
           } catch (e) {

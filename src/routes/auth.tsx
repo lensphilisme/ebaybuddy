@@ -33,6 +33,36 @@ function AuthPage() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<"signin" | "signup">("signin");
+  const [emailValue, setEmailValue] = useState("");
+  const [sending, setSending] = useState(false);
+
+  async function forgotPassword() {
+    if (!emailValue.trim()) { toast.error("Enter your email above first, then tap Forgot password."); return; }
+    setSending(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(emailValue.trim(), { redirectTo: `${window.location.origin}/auth` });
+      if (error) throw error;
+      toast.success("Password reset email sent — check your inbox.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not send the reset email");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function resendConfirmation() {
+    if (!emailValue.trim()) { toast.error("Enter your email above first, then tap Resend confirmation email."); return; }
+    setSending(true);
+    try {
+      const { error } = await supabase.auth.resend({ type: "signup", email: emailValue.trim() });
+      if (error) throw error;
+      toast.success("Confirmation email resent — check your inbox.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not resend the confirmation email");
+    } finally {
+      setSending(false);
+    }
+  }
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -134,12 +164,16 @@ function AuthPage() {
             </TabsList>
             <TabsContent value="signin">
               <form onSubmit={(e) => handleSubmit(e, "signin")} className="space-y-4 mt-4">
-                <Field label="Email" name="email" type="email" required maxLength={255} />
+                <Field label="Email" name="email" type="email" required maxLength={255} onChange={(e) => setEmailValue(e.target.value)} />
                 <Field label="Password" name="password" type="password" required minLength={8} maxLength={72} />
                 <Button type="submit" className="w-full" disabled={loading}>
                   {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Sign in"}
                 </Button>
               </form>
+              <div className="mt-3 flex items-center justify-between">
+                <Button type="button" variant="link" size="sm" className="px-0" disabled={sending} onClick={forgotPassword}>Forgot password?</Button>
+                <Button type="button" variant="link" size="sm" className="px-0" disabled={sending} onClick={resendConfirmation}>Resend confirmation email</Button>
+              </div>
             </TabsContent>
             <TabsContent value="signup">
               <form onSubmit={(e) => handleSubmit(e, "signup")} className="space-y-4 mt-4">

@@ -88,6 +88,33 @@ export type CjListResponse = {
   list: CjListItem[];
 };
 
+type CjListV2Product = {
+  id?: string;
+  nameEn?: string;
+  sku?: string;
+  bigImage?: string;
+  sellPrice?: number | string;
+  categoryId?: string;
+  threeCategoryName?: string;
+  listedNum?: number;
+  supplierName?: string;
+};
+
+type CjListV2Response = {
+  pageSize?: number;
+  pageNumber?: number;
+  totalRecords?: number;
+  totalPages?: number;
+  content?: { productList?: CjListV2Product[] }[];
+};
+
+/**
+ * CJ Product List V2 (elasticsearch-backed). The v1 /product/list endpoint
+ * is deprecated — it receives no further enhancements and its countryCode
+ * filter was silently ignored. V2's response shape differs from v1:
+ * data.content[].productList[] with `id`/`nameEn`/`bigImage` instead of
+ * `pid`/`productNameEn`/`productImage`, so map it back to CjListItem.
+ */
 export async function cjSearchProducts(params: {
   keyword?: string;
   categoryId?: string;
@@ -98,14 +125,33 @@ export async function cjSearchProducts(params: {
   maxPrice?: number;
 }, token?: string): Promise<CjListResponse> {
   const q = new URLSearchParams();
-  q.set("pageNum", String(params.pageNum ?? 1));
-  q.set("pageSize", String(params.pageSize ?? 20));
-  if (params.keyword) q.set("productNameEn", params.keyword);
+  q.set("page", String(Math.max(1, Math.min(params.pageNum ?? 1, 1000))));
+  q.set("size", String(Math.max(1, Math.min(params.pageSize ?? 20, 100))));
+  if (params.keyword) q.set("keyWord", params.keyword);
   if (params.categoryId) q.set("categoryId", params.categoryId);
   if (params.countryCode) q.set("countryCode", params.countryCode);
-  if (params.minPrice != null) q.set("minPrice", String(params.minPrice));
-  if (params.maxPrice != null) q.set("maxPrice", String(params.maxPrice));
-  return cjFetch<CjListResponse>(`/product/list?${q}`, {}, token);
+  if (params.minPrice != null) q.set("startSellPrice", String(params.minPrice));
+  if (params.maxPrice != null) q.set("endSellPrice", String(params.maxPrice));
+  // enable_category returns threeCategoryName so the grid can show categories.
+  q.set("features", "enable_category");
+  const data = await cjFetch<CjListV2Response>(`/product/listV2?${q}`, {}, token);
+  const list: CjListItem[] = (data.content || []).flatMap((c) => c.productList || []).map((p) => ({
+    pid: String(p.id || ""),
+    productNameEn: p.nameEn || "",
+    productSku: p.sku || "",
+    productImage: p.bigImage || "",
+    sellPrice: p.sellPrice ?? 0,
+    categoryId: p.categoryId,
+    categoryName: p.threeCategoryName,
+    listedNum: p.listedNum,
+    supplierName: p.supplierName,
+  })).filter((p) => p.pid);
+  return {
+    pageNum: data.pageNumber ?? params.pageNum ?? 1,
+    pageSize: data.pageSize ?? params.pageSize ?? 20,
+    total: data.totalRecords ?? list.length,
+    list,
+  };
 }
 
 export type CjVariant = {

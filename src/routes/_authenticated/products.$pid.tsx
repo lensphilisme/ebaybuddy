@@ -4,7 +4,7 @@ import { AppShell } from "@/components/app-shell";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getCjProduct, getCjFreight } from "@/lib/cj.functions";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,8 @@ import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious
 import { ArrowLeft, Loader2, Truck, FileEdit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import DOMPurify from "dompurify";
+import { priceFromRules, PRICING_DEFAULTS } from "@/lib/pricing";
 
 export const Route = createFileRoute("/_authenticated/products/$pid")({ head: () => pageHead("CJ product details", "Inspect CJ variants, images and live freight pricing."),
   component: ProductDetailPage,
@@ -29,7 +31,16 @@ const COUNTRIES = [
   { code: "FR", name: "France" },
 ];
 
-const EBAY_FEE_PCT = 0.17;
+function variantAxes(productKey?: string, firstVariant?: any, productProps?: string[]) {
+  const keyAxes = String(productKey || "").split(/[-,/|>]+/).map((p) => p.trim()).filter(Boolean);
+  if (keyAxes.length) return keyAxes;
+  // CJ sometimes lists the option names as product properties instead of a
+  // "Color-Size" style key — use those before falling back to generic labels.
+  const propAxes = (productProps || []).map((p) => String(p || "").trim()).filter(Boolean);
+  if (propAxes.length) return propAxes;
+  const parts = String(firstVariant?.variantKey || firstVariant?.variantNameEn || "").split(/[-,/|]+/).filter(Boolean);
+  return parts.length > 1 ? parts.map((_, i) => `Option ${i + 1}`) : ["Option"];
+}
 
 function cleanImageList(...inputs: unknown[]) {
   const urls: string[] = [];
@@ -51,13 +62,6 @@ function cleanImageList(...inputs: unknown[]) {
   return Array.from(new Set(urls));
 }
 
-function variantAxes(productKey?: string, firstVariant?: any) {
-  const keyAxes = String(productKey || "").split(/[-,/|>]+/).map((p) => p.trim()).filter(Boolean);
-  if (keyAxes.length) return keyAxes;
-  const parts = String(firstVariant?.variantKey || firstVariant?.variantNameEn || "").split(/[-,/|]+/).filter(Boolean);
-  return parts.length > 1 ? parts.map((_, i) => `Option ${i + 1}`) : ["Option"];
-}
-
 function variantOptionMap(variant: any, axes: string[]) {
   const label = String(variant?.variantKey || variant?.variantNameEn || variant?.variantSku || variant?.vid || "Option").trim();
   const parts = label.split(/[-,/|]+/).map((p) => p.trim()).filter(Boolean);
@@ -77,6 +81,23 @@ function ProductDetailPage() {
     staleTime: 5 * 60_000,
   });
 
+  // The user's own pricing rules — the single source of fee/markup numbers.
+  const { data: rules } = useQuery({
+    queryKey: ["automation-rules-pricing"],
+    queryFn: async () => {
+      const { data } = await supabase.from("automation_rules").select("markup_percent,min_profit_usd,ebay_fee_buffer_percent,payment_fee_buffer_percent,round_to,max_listing_quantity").maybeSingle();
+      return data || null;
+    },
+    staleTime: 5 * 60_000,
+  });
+
+  // CJ descriptions are third-party HTML: sanitize before rendering so a
+  // compromised listing cannot run script in the user's session.
+  const cleanDescription = useMemo(() => {
+    if (!p?.description || typeof window === "undefined") return "";
+    return DOMPurify.sanitize(p.description, { USE_PROFILES: { html: true } });
+  }, [p?.description]);
+
   const variants = useMemo(() => {
     if (!p) return [];
     return p.variants ?? p.variantList ?? p.productVariants ?? [];
@@ -95,7 +116,9 @@ function ProductDetailPage() {
 
   const [country, setCountry] = useState("US");
   const [variantId, setVariantId] = useState<string>("");
-  const [markupPct, setMarkupPct] = useState(50);
+  // Markup slider: null means "use the Rules page value" (default 35%).
+  const [markupOverride, setMarkupOverride] = useState<number | null>(null);
+  const markupPct = markupOverride ?? Number(rules?.markup_percent ?? PRICING_DEFAULTS.markup_percent);
 
   const activeVid = variantId || variants[0]?.vid || "";
   const activeVariant = variants.find((v) => v.vid === activeVid);
@@ -110,23 +133,34 @@ function ProductDetailPage() {
     onError: (e: Error) => toast.error(e.message),
   });
   const [selectedCarrier, setSelectedCarrier] = useState<string>("");
+  const [carrierResetNote, setCarrierResetNote] = useState<string>("");
   const carrier = freight.data?.find((o) => o.logisticName === selectedCarrier) ?? freight.data?.[0];
   const shipping = carrier?.logisticPrice ?? 0;
+  // Never silently switch carriers: if the user's pick vanished from a
+  // fresh quote, say so instead of quietly showing the cheapest.
+  useEffect(() => {
+    if (!freight.data?.length) return;
+    if (selectedCarrier && !freight.data.some((o) => o.logisticName === selectedCarrier)) {
+      setCarrierResetNote(`"${selectedCarrier}" wasn't in the new quote — showing ${freight.data[0].logisticName} instead.`);
+    } else {
+      setCarrierResetNote("");
+    }
+  }, [freight.data, selectedCarrier]);
 
-  const landed = itemCost + shipping;
-  const desiredProfit = landed * (markupPct / 100);
-  const preFeePrice = landed + desiredProfit;
-  const ebayFee = preFeePrice * EBAY_FEE_PCT;
-  const finalSell = preFeePrice + ebayFee;
+  // One pricing formula for the whole app (see src/lib/pricing.ts): the
+  // fee rate comes from the user's Rules, never a hardcoded percent.
+  const priced = priceFromRules(itemCost, shipping, rules, markupPct);
+  const landed = priced.landed;
+  const desiredProfit = priced.profit;
+  const preFeePrice = priced.preFeePrice;
+  const ebayFee = priced.ebayFee;
+  const finalSell = priced.finalSell;
   const profit = desiredProfit;
-  const axes = useMemo(() => variantAxes(p?.productKeyEn, variants[0]), [p?.productKeyEn, variants]);
+  const axes = useMemo(() => variantAxes(p?.productKeyEn, variants[0], p?.productProEnSet), [p?.productKeyEn, p?.productProEnSet, variants]);
   const selectedOptions = activeVariant ? variantOptionMap(activeVariant, axes) : {};
   const priceForVariant = (rawCost: unknown) => {
     const variantCost = Number(rawCost ?? itemCost) || itemCost;
-    const variantLanded = variantCost + shipping;
-    const variantProfit = variantLanded * (markupPct / 100);
-    const variantPreFee = variantLanded + variantProfit;
-    return Number((variantPreFee + variantPreFee * EBAY_FEE_PCT).toFixed(2));
+    return priceFromRules(variantCost, shipping, rules, markupPct).finalSell;
   };
 
   const sendToDraft = useMutation({
@@ -160,13 +194,17 @@ function ProductDetailPage() {
           shipping,
           carrier: carrier?.logisticName ?? null,
           carrier_days: carrier?.logisticAging ?? null,
-          ebay_fee_pct: EBAY_FEE_PCT,
+          ebay_fee_pct: priced.feeRate,
           ebay_fee: Number(ebayFee.toFixed(2)),
           desired_profit: Number(desiredProfit.toFixed(2)),
           markup_pct: markupPct,
+          min_profit_usd: Number(rules?.min_profit_usd ?? PRICING_DEFAULTS.min_profit_usd),
           profit: Number(profit.toFixed(2)),
           end_country: country,
-          start_country: "CN",
+          // Freight is quoted from the product's origin country when CJ
+          // reports it, otherwise CN (the quote default) — never a blind
+          // constant that contradicts the quote shown.
+          start_country: (p as any)?.countryCode || (p as any)?.countryFrom || (p as any)?.sourceFrom || "CN",
           product_key: p.productKeyEn || null,
           variant_axes: axes,
           variant_group: allVariantRows.length > 1 ? { variants: allVariantRows } : null,
@@ -288,15 +326,16 @@ function ProductDetailPage() {
             <Card className="p-4 space-y-3">
               <div className="text-sm font-medium">Pricing</div>
               <div>
-                <Label className="text-xs text-muted-foreground">Markup over landed cost: {markupPct}%</Label>
-                <Input type="range" min={10} max={300} step={5} value={markupPct} onChange={(e) => setMarkupPct(Number(e.target.value))} />
+                <Label className="text-xs text-muted-foreground">Markup over landed cost: {markupPct}%{markupOverride === null ? " (from Rules)" : ""}</Label>
+                <Input type="range" min={10} max={300} step={5} value={markupPct} onChange={(e) => setMarkupOverride(Number(e.target.value))} />
               </div>
               <dl className="grid grid-cols-2 gap-y-1 text-sm">
                 <dt className="text-muted-foreground">Item cost</dt><dd className="text-right">${itemCost.toFixed(2)}</dd>
                 <dt className="text-muted-foreground">+ Shipping ({carrier?.logisticName ?? "—"})</dt><dd className="text-right">${shipping.toFixed(2)}</dd>
+                {carrierResetNote && <dd className="col-span-2 text-xs text-amber-600">{carrierResetNote}</dd>}
                 <dt className="font-medium">Landed cost</dt><dd className="text-right font-medium">${landed.toFixed(2)}</dd>
                   <dt className="text-muted-foreground">Profit before fee</dt><dd className="text-right">${desiredProfit.toFixed(2)}</dd>
-                  <dt className="text-muted-foreground">eBay fee ({Math.round(EBAY_FEE_PCT * 100)}% of ${preFeePrice.toFixed(2)})</dt><dd className="text-right">${ebayFee.toFixed(2)}</dd>
+                  <dt className="text-muted-foreground">eBay + payment fees ({Math.round(priced.feeRate * 100)}% of ${preFeePrice.toFixed(2)})</dt><dd className="text-right">${ebayFee.toFixed(2)}</dd>
                 <dt className="font-semibold">eBay sell price</dt><dd className="text-right font-semibold text-primary">${finalSell.toFixed(2)}</dd>
                 <dt className="font-semibold">Profit</dt><dd className={`text-right font-semibold ${profit >= 0 ? "text-success" : "text-destructive"}`}>${profit.toFixed(2)}</dd>
               </dl>
@@ -308,7 +347,7 @@ function ProductDetailPage() {
             {p.description && (
               <Card className="p-4">
                 <div className="text-sm font-medium mb-2">Description</div>
-                <div className="prose prose-sm max-w-none text-sm overflow-hidden break-words [&_*]:max-w-full [&_img]:h-auto [&_table]:w-full" dangerouslySetInnerHTML={{ __html: p.description }} />
+                <div className="prose prose-sm max-w-none text-sm overflow-hidden break-words [&_*]:max-w-full [&_img]:h-auto [&_table]:w-full" dangerouslySetInnerHTML={{ __html: cleanDescription }} />
               </Card>
             )}
           </div>
