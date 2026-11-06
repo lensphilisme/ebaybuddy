@@ -28,12 +28,37 @@ export class EbayOrderService {
 }
 
 export class EbayReturnService {
+  // Post-Order API v2 — the modern REST surface for returns (NOT the legacy
+  // Trading API). Two differences from the Sell REST family:
+  // - it authenticates with "IAF {token}" instead of "Bearer {token}", so
+  //   this service builds its client with authScheme "IAF";
+  // - it needs the sell.fulfillment scope (added to the OAuth consent list
+  //   Nov 2026 — accounts connected before then must reconnect once).
   constructor(private client: EbayRestClient) {}
-  /** Do not silently route ordinary returns through a legacy Post-Order API. */
-  searchReturns(offset = 0, filter?: string) {
-    throw new Error("Modern returns access is not available for this application. Manage returns in eBay Seller Hub.");
+  private mapReturn(raw: any): ReturnRecord {
+    const items = raw.returnItems || raw.items || [];
+    return {
+      returnId: String(raw.returnId || raw.return_id || ""),
+      returnStatus: String(raw.returnState || raw.returnStatus || raw.state || ""),
+      creationDate: String(raw.creationDate || raw.createdDate || ""),
+      orderId: String(raw.orderId || raw.order_id || ""),
+      buyerUsername: String(raw.buyer?.username || raw.buyerUsername || ""),
+      returnItems: (Array.isArray(items) ? items : []).map((it: any) => ({
+        itemId: String(it.itemId || it.item_id || ""),
+        returnQuantity: Number(it.returnQuantity || it.quantity || 0) || undefined,
+        returnReason: String(it.returnReason || it.reason || ""),
+      })),
+    };
   }
-  returnById(returnId: string) {
-    throw new Error("Manage this return in eBay Seller Hub; a supported modern return contract has not been verified.");
+  async searchReturns(offset = 0, filter?: string) {
+    const query = new URLSearchParams({ limit: "50", offset: String(offset) });
+    if (filter) query.set("filter", filter);
+    const json = await this.client.json<{ members?: any[]; total?: number }>(`/post-order/v2/return/search?${query}`);
+    const members = (json.members || []).map((m) => this.mapReturn(m)).filter((r) => r.returnId);
+    return { total: json.total ?? members.length, returns: members };
+  }
+  async returnById(returnId: string) {
+    const json = await this.client.json<any>(`/post-order/v2/return/${encodeURIComponent(returnId)}`);
+    return this.mapReturn(json);
   }
 }

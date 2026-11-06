@@ -6,6 +6,7 @@ import { EbayOrderService, EbayReturnService } from "./ebay/orders.server";
 import { EbayNotificationService } from "./ebay/notifications.server";
 import { EbayMarketingService, campaignInput } from "./ebay/marketing.server";
 import { requireLiveOptimizer, requireListingIdentity, hasFreshTraffic } from "./ebay/optimizer-policy";
+import { callAiJson, callAiText } from "./ai-provider.server";
 
 function cleanTitle(value: unknown) {
   return String(value ?? "")
@@ -293,8 +294,9 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
     return results;
   });
 // Category picker. Returns eBay's own category suggestions for a product,
-// top candidates first so the user can accept or override.
-// (The Lovable AI gateway that used to re-rank these was removed Nov 2026.)
+// top candidates first so the user can accept or override. When an AI
+// provider is configured in Settings, the AI re-ranks eBay's suggestions
+// against the title/description instead of guessing a category itself.
 export const aiDeepCategorySuggest = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { title: string; description?: string; hint?: string }) => data)
@@ -302,7 +304,22 @@ export const aiDeepCategorySuggest = createServerFn({ method: "POST" })
     const token = await getFreshEbayToken(context.supabase, context.userId);
     const normal = await getCategorySuggestions(token, data.title, "EBAY_US").catch(() => []);
     let picks: { categoryId: string; path: string; reason: string }[] = [];
-        if (picks.length === 0) {
+    try {
+      const aiOut = await callAiJson(context.supabase, context.userId, {
+        system: "You pick the best eBay category as JSON. Reply with ONLY a JSON object: {\"picks\": [{\"categoryId\": \"...\", \"path\": \"...\", \"reason\": \"...\"}, ...]} with up to 3 picks, ordered best first. Pick ONLY from the suggestions given — never invent a categoryId. Prefer the most specific leaf category that fits the product.",
+        user: JSON.stringify({ title: data.title, description: data.description || "", hint: data.hint || "", suggestions: normal.slice(0, 10) }),
+      });
+      const aiPicks = Array.isArray(aiOut?.picks) ? aiOut.picks : [];
+      picks = aiPicks
+        .map((p: any) => {
+          const match = normal.find((c: any) => String(c.categoryId) === String(p.categoryId));
+          return match ? { categoryId: match.categoryId, path: match.path, reason: String(p.reason || "AI pick").slice(0, 120) } : null;
+        })
+        .filter(Boolean) as { categoryId: string; path: string; reason: string }[];
+    } catch {
+      /* AI is a re-ranker only; eBay's own suggestions are the fallback. */
+    }
+    if (picks.length === 0) {
       picks = normal.slice(0, 3).map((c: any) => ({ categoryId: c.categoryId, path: c.path, reason: "eBay suggestion" }));
     }
     return picks;
@@ -354,6 +371,15 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
       const needsRewrite = /ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "") || (l.views || 0) === 0 || (ageDays >= daysNoViewsRewrite && (l.views || 0) < 5) || (ageDays >= poorExposureDays && (l.clicks || 0) === 0);
       if (needsRewrite) {
         let newTitle = fallbackRewrite(l.title);
+        try {
+          const aiTitle = await callAiText(context.supabase, context.userId, {
+            system: "Rewrite this eBay listing title to get more views. Reply with ONLY the new title, nothing else. Max 80 characters, no ALL CAPS, no keyword stuffing, no other marketplace names, no words like 'amazing' or 'best'. Keep the real product words; drop filler.",
+            user: l.title,
+          });
+          if (aiTitle) newTitle = cleanTitle(aiTitle);
+        } catch {
+          /* AI is optional here; the local rewrite stands. */
+        }
                 const reason = /ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "") ? "removed prohibited marketplace text" : `${ageDays}d, ${l.views || 0} views, ${l.clicks || 0} clicks, ${l.sales || 0} sales`;
         const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: l.id, title: l.title, action: "rewrite_title", detail: `${newTitle} · ${reason}` };
         actions.push(action);
@@ -398,7 +424,19 @@ export const listEbayDisputes = createServerFn({ method: "POST" })
 export const listEbayReturns = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { offset?: number; filter?: string }) => data)
-  .handler(async () => { throw new Error("Manage returns in eBay Seller Hub. Modern returns access has not been verified for this application."); });
+  .handler(async ({ data, context }: any) => {
+    // Post-Order v2 authenticates with IAF, not Bearer — see orders.server.
+    const token = await getFreshEbayToken(context.supabase, context.userId);
+    return new EbayReturnService(new EbayRestClient(token, "EBAY_US", { authScheme: "IAF" })).searchReturns(data.offset ?? 0, data.filter);
+  });
+
+export const getEbayReturn = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { returnId: string }) => data)
+  .handler(async ({ data, context }: any) => {
+    const token = await getFreshEbayToken(context.supabase, context.userId);
+    return new EbayReturnService(new EbayRestClient(token, "EBAY_US", { authScheme: "IAF" })).returnById(data.returnId);
+  });
 
 export const listEbayNotificationTopics = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])

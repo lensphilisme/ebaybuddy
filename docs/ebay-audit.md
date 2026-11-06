@@ -111,10 +111,39 @@ fields are preserved.
 - Ordinary returns are linked to eBay Seller Hub rather than calling legacy Post-Order APIs or inventing a GraphQL returns schema.
 - Inventory offers do **not** guarantee access to externally-created listings. Preserved local records remain available, but modern remote management requires Inventory ownership.
 
+## Nov 6, 2026 — full re-audit + bring-your-own AI provider
+
+- Re-audited every eBay call site. Everything uses modern REST (`api.ebay.com`:
+  Inventory, Fulfillment, Account, Marketing, Taxonomy, Metadata,
+  Commerce Notification) or the GraphQL gateway (`graphqlapi.ebay.com`).
+  No SOAP / Trading API / `ws/api.dll` call remains anywhere.
+- Fixed: the OAuth consent list was MISSING `sell.notification` (an earlier
+  note claimed the scope was invalid — it is a real eBay scope and the
+  Notification API needs it) and `sell.fulfillment` (write). Without them,
+  notification subscriptions and returns/shipping-fulfillment calls 403.
+  Accounts connected before Nov 6, 2026 must reconnect once.
+- Fixed: `EbayReturnService` was a stub that threw. Returns now use the
+  modern Post-Order API v2 (`GET /post-order/v2/return/search` and
+  `GET /post-order/v2/return/{returnId}`), which is REST, not legacy. It
+  authenticates with `IAF {token}` instead of `Bearer`, so `EbayRestClient`
+  takes an `authScheme` option; `listEbayReturns` / `getEbayReturn` are
+  wired to it.
+- Removed dead `getEbayCategoryTreeShallow` (no callers since the AI
+  category picker stopped using the tree).
+- Listing AI is now bring-your-own-provider: DeepSeek (default,
+  `deepseek-v4-flash`, cheapest), Gemini (`gemini-2.5-flash`), OpenAI
+  (`gpt-4o-mini`) or any OpenAI-compatible endpoint. The admin adds the
+  API key in Settings → Listing AI; the key is validated live, stored
+  server-side only (never returned to the client), and used for title
+  rewrites, item specifics, draft repair, category re-ranking and
+  optimizer title rewrites. No provider configured = local rules, exactly
+  as before. Env fallback: `AI_PROVIDER` / `AI_API_KEY` / `AI_MODEL` /
+  `AI_BASE_URL` (see `.env.example`).
+
 ## Historical notes below — not completion claims
 
 ## Still manual / to verify in Sandbox or Production
-1. Reconnect eBay once (new `sell.notification` scope) and reconnect CJ
+1. Reconnect eBay once (new `sell.notification` + `sell.fulfillment` scopes) and reconnect CJ
    once with the API key only — old stored CJ tokens will no longer work
    without an API key behind them.
 2. Create the eBay webhook destination for your deployed public URL,
@@ -129,6 +158,5 @@ fields are preserved.
    the Inventory API limit, not a bug in sync.
 
 ## Tests
-- `bun test src/lib/ebay/http.test.ts src/lib/ebay/listings.test.ts src/lib/cj-auth.test.ts`
-  — 12 tests pass, using mock fixtures in `src/lib/ebay/__fixtures__/`.
-  No test hits a live eBay or CJ endpoint.
+- `bun test` — 32 tests pass (Nov 6, 2026), using mock fixtures in `src/lib/ebay/__fixtures__/` and mocked fetch for the AI providers.
+  No test hits a live eBay, CJ or AI endpoint.

@@ -1,10 +1,17 @@
-// NOTE: Lovable was removed from this project (Nov 2026). The AI features
-// that used to call Lovable's AI gateway now run on the local fallback
-// rules in this file (title/description/specifics derived from the draft
-// itself). To restore smart AI, plug in your own provider here.
+// Listing AI (Nov 2026): the user connects their own provider in Settings
+// (DeepSeek, Gemini, OpenAI or any OpenAI-compatible endpoint) and these
+// functions call it through src/lib/ai-provider.server.ts. When no provider
+// is configured — or the provider fails — the local fallback rules in this
+// file fill everything, so listing work never blocks on AI.
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { cjProductDetail, getUserCjToken } from "./cj.server";
+import { callAiJson } from "./ai-provider.server";
+
+async function getAspectCatalog(accessToken: string, categoryId: string) {
+  const { getItemAspectsForCategory } = await import("./ebay.server");
+  return getItemAspectsForCategory(accessToken, categoryId);
+}
 
 function cleanText(value: unknown, fallback = "") {
   const normalize = (v: unknown) => String(v ?? "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/\s+/g, " ").trim();
@@ -141,7 +148,28 @@ export const optimizeDraftWithAi = createServerFn({ method: "POST" })
   .handler(async ({ data, context }: any) => {
     const { data: draft, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).eq("id", data.draftId).single();
     if (error) throw error;
-    const out: any = { item_specifics: fallback(draft.title, draft.description).item_specifics, brand: draft.brand || "Unbranded", model: draft.model || "Does Not Apply" };
+    const local = fallback(draft.title, draft.description);
+    let aiOut: any = null;
+    try {
+      let cjDetail: any = null;
+      try { cjDetail = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", await getUserCjToken(context.supabase, context.userId)); } catch { /* AI works from the draft alone */ }
+      let catalog: any = {};
+      try {
+        if (draft.category_id) {
+          const { getFreshEbayToken } = await import("./ebay.server");
+          catalog = await getAspectCatalog(await getFreshEbayToken(context.supabase, context.userId), String(draft.category_id));
+        }
+      } catch { /* catalog is a hint, not a requirement */ }
+      aiOut = await callAiJson(context.supabase, context.userId, {
+        system: "You write eBay item specifics as JSON. Reply with ONLY a JSON object: {\"item_specifics\": {\"Brand\": \"...\", \"Model\": \"...\", \"Type\": \"...\", \"Material\": \"...\"}, \"brand\": \"...\", \"model\": \"...\"}. Use only aspects from the catalog when one is given. Never invent a brand or model — use \"Unbranded\" / \"Does Not Apply\" when unknown. Never include location aspects (country, city, warehouse).",
+        user: JSON.stringify({ title: draft.title, description: draft.description, cjProductName: cjDetail?.productNameEn || null, cjDescription: cjDetail?.description || null, catalog: catalogForPrompt(catalog) }),
+      });
+    } catch (e) {
+      await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "warn", category: "ai", message: `AI provider failed for item specifics, used local rules: ${draft.title}`, metadata: { draftId: draft.id, error: e instanceof Error ? e.message : String(e) } });
+    }
+    const out: any = aiOut?.item_specifics
+      ? { item_specifics: aiOut.item_specifics, brand: aiOut.brand || draft.brand || "Unbranded", model: aiOut.model || draft.model || "Does Not Apply" }
+      : { item_specifics: local.item_specifics, brand: draft.brand || "Unbranded", model: draft.model || "Does Not Apply" };
         const specifics = sanitizeSpecifics({ Brand: out.brand || draft.brand || "Unbranded", ...(out.item_specifics || {}), Model: out.model || draft.model || "Does Not Apply" });
     const update = {
       item_specifics: specifics,
@@ -149,7 +177,7 @@ export const optimizeDraftWithAi = createServerFn({ method: "POST" })
       model: Array.isArray(specifics.Model) ? specifics.Model[0] : specifics.Model,
     };
     await context.supabase.from("listing_drafts").update(update).eq("id", draft.id);
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `AI filled item specifics: ${draft.title}`, metadata: { draftId: draft.id, aspectCount: Object.keys(specifics).length } });
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `AI filled item specifics: ${draft.title}`, metadata: { draftId: draft.id, aspectCount: Object.keys(specifics).length, ai: !!aiOut } });
     return update;
   });
 
@@ -159,14 +187,24 @@ export const optimizeDraftCopyWithAi = createServerFn({ method: "POST" })
   .handler(async ({ data, context }: any) => {
     const { data: draft, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).eq("id", data.draftId).single();
     if (error) throw error;
-    const out = fallback(draft.title, draft.description);
+    const local = fallback(draft.title, draft.description);
+    let aiOut: any = null;
+    try {
+      aiOut = await callAiJson(context.supabase, context.userId, {
+        system: "You write eBay listing copy as JSON. Reply with ONLY a JSON object: {\"title\": \"...\", \"description\": \"...\", \"bullet_features\": [\"...\", \"...\"]}. Title max 80 characters, no ALL CAPS, no keyword stuffing, no other marketplace names. Description is plain text, 2 short paragraphs plus the bullets. Never invent features, sizes or materials not in the input.",
+        user: JSON.stringify({ title: draft.title, description: draft.description }),
+      });
+    } catch (e) {
+      await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "warn", category: "ai", message: `AI provider failed for listing copy, used local rules: ${draft.title}`, metadata: { draftId: draft.id, error: e instanceof Error ? e.message : String(e) } });
+    }
+    const out = aiOut?.title ? aiOut : local;
         const update = {
       title: cleanText(out.title, draft.title).slice(0, 80),
-      description: cleanText(out.description, fallback(draft.title, draft.description).description),
+      description: cleanText(out.description, local.description),
       bullet_features: Array.isArray(out.bullet_features) ? out.bullet_features.map((b: unknown) => shortAspect("Features", b)).filter(Boolean).slice(0, 8) : [],
     };
     await context.supabase.from("listing_drafts").update(update).eq("id", draft.id);
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `AI optimized listing copy: ${update.title}`, metadata: { draftId: draft.id } });
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `AI optimized listing copy: ${update.title}`, metadata: { draftId: draft.id, ai: !!aiOut } });
     return update;
   });
 
@@ -190,9 +228,24 @@ export const repairDraftForEbay = createServerFn({ method: "POST" })
     const axes = variantAxes(cjDetail?.productKeyEn || draft.profit?.product_key, (cjDetail?.variants || cjDetail?.variantList || cjDetail?.productVariants || draft.profit?.variant_group?.variants || [])[0]);
     const variants = variantRows(cjDetail, draft, baseImages);
 
-    const aiOut: any = {}; // No AI provider configured; local fallback below fills everything.
-    
     const fallbackOut = fallback(titleSource, descriptionSource);
+    let aiOut: any = null;
+    try {
+      let catalog: any = {};
+      try {
+        if (draft.category_id) {
+          const { getFreshEbayToken } = await import("./ebay.server");
+          catalog = await getAspectCatalog(await getFreshEbayToken(context.supabase, context.userId), String(draft.category_id));
+        }
+      } catch { /* catalog is a hint, not a requirement */ }
+      aiOut = await callAiJson(context.supabase, context.userId, {
+        system: "You repair CJ product data into eBay listing format as JSON. Reply with ONLY a JSON object: {\"title\": \"...\", \"description\": \"...\", \"bullet_features\": [\"...\"], \"item_specifics\": {\"Brand\": \"...\", \"Model\": \"...\", \"Type\": \"...\"}, \"brand\": \"...\", \"model\": \"...\"}. Title max 80 characters. Use only aspects from the catalog when one is given. Never invent a brand, model, size or material — use \"Unbranded\" / \"Does Not Apply\" when unknown. Never include location aspects.",
+        user: JSON.stringify({ title: titleSource, description: descriptionSource, cjProductName: cjDetail?.productNameEn || null, cjDescription: cjDetail?.description || null, catalog: catalogForPrompt(catalog) }),
+      });
+    } catch (e) {
+      await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "warn", category: "ai", message: `AI provider failed for draft repair, used local rules: ${draft.title}`, metadata: { draftId: draft.id, error: e instanceof Error ? e.message : String(e) } });
+    }
+    if (!aiOut) aiOut = {};
     const title = cleanText(aiOut.title, titleSource).slice(0, 80) || fallbackOut.title;
     const description = cleanText(aiOut.description, descriptionSource) || fallbackOut.description;
     const bulletFeatures = (Array.isArray(aiOut.bullet_features) ? aiOut.bullet_features : fallbackOut.bullet_features)

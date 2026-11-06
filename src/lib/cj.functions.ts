@@ -90,10 +90,20 @@ export const getIntegrationStatus = createServerFn({ method: "GET" })
     const { data } = await context.supabase.from("integration_credentials").select("provider,is_active,last_validated_at,credentials").eq("user_id", context.userId);
     const cjRow = data?.find((r: any) => r.provider === "cj");
     const ebayRow = data?.find((r: any) => r.provider === "ebay");
+    const aiRow = data?.find((r: any) => r.provider === "ai");
     const cjConnected = cjRow ? !!(cjRow.is_active && (cjRow.credentials?.managed || cjRow.credentials?.api_key)) : !!process.env.CJ_API_KEY;
     const ebayConnected = !!(ebayRow?.is_active && ebayRow.credentials?.refresh_token);
+    const aiConnected = !!(aiRow?.is_active && aiRow.credentials?.api_key) || !!(process.env.AI_API_KEY || "").trim();
     return {
       cj: { connected: cjConnected, source: cjRow ? "user" : cjConnected ? "env" : null, last: cjRow?.last_validated_at || null },
       ebay: { connected: ebayConnected, source: ebayConnected ? "user" : null, last: ebayRow?.last_validated_at || null },
+      ai: {
+        connected: aiConnected,
+        provider: aiRow?.credentials?.provider || process.env.AI_PROVIDER || null,
+        model: aiRow?.credentials?.model || process.env.AI_MODEL || null,
+        keyLast4: aiRow?.credentials?.api_key ? String(aiRow.credentials.api_key).slice(-4) : null,
+        source: aiRow ? "user" : aiConnected ? "env" : null,
+        last: aiRow?.last_validated_at || null,
+      },
     };
   });

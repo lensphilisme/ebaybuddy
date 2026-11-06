@@ -1,5 +1,5 @@
 import { EbayRestClient } from "./rest.server";
-import type { AspectSpec, CategorySuggestion, CategoryTreeNode } from "./contracts";
+import type { AspectSpec, CategorySuggestion } from "./contracts";
 
 // Modern Taxonomy API only — no GetCategories / GetCategoryFeatures / GeteBayDetails.
 // All calls go through EbayRestClient, so they share typed errors, correlation
@@ -45,25 +45,4 @@ export async function getItemAspectsForCategory(accessToken: string, categoryId:
     }
     return out;
   } catch { return {}; }
-}
-
-// Fetch the first levels of the eBay category tree for a marketplace.
-// Used by the AI deep-category picker as a fallback when normal suggestions are wrong.
-export async function getEbayCategoryTreeShallow(accessToken: string, marketplaceId = "EBAY_US"): Promise<{ treeId: string; categories: CategoryTreeNode[] }> {
-  const client = new EbayRestClient(accessToken, marketplaceId);
-  const treeMeta = await client.json<{ categoryTreeId: string }>(`/commerce/taxonomy/v1/get_default_category_tree_id?marketplace_id=${marketplaceId}`);
-  const fullJson = await client.json<{ rootCategoryNode: any }>(`/commerce/taxonomy/v1/category_tree/${treeMeta.categoryTreeId}`);
-  const rows: CategoryTreeNode[] = [];
-  const walk = (node: any, path: string[], depth: number) => {
-    const name = node?.category?.categoryName;
-    const id = node?.category?.categoryId;
-    const nextPath = name ? [...path, name] : path;
-    const leaf = !!node?.leafCategoryTreeNode;
-    if (id && depth >= 1) rows.push({ categoryId: id, path: nextPath.join(" > "), leaf });
-    if (node?.childCategoryTreeNodes && depth < 3) {
-      for (const c of node.childCategoryTreeNodes) walk(c, nextPath, depth + 1);
-    }
-  };
-  walk(fullJson.rootCategoryNode, [], 0);
-  return { treeId: treeMeta.categoryTreeId, categories: rows };
 }

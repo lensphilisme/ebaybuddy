@@ -1,10 +1,10 @@
 import { classifyEbayError, ebayFetch } from "./http";
 
 export class EbayRestClient {
-  constructor(private token: string, private marketplace = "EBAY_US") {}
+  constructor(private token: string, private marketplace = "EBAY_US", private options: { authScheme?: "Bearer" | "IAF" } = {}) {}
   async response(path: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
-    headers.set("Authorization", `Bearer ${this.token}`);
+    headers.set("Authorization", `${this.options.authScheme || "Bearer"} ${this.token}`);
     headers.set("Content-Type", "application/json");
     headers.set("Content-Language", "en-US");
     headers.set("Accept-Language", "en-US");
