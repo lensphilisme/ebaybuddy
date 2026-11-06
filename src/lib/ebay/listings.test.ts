@@ -115,6 +115,32 @@ describe("sync resilience (task B3)", () => {
     globalThis.fetch = realFetch;
   });
 
+  test("a bulk offer list poisoned by one bad SKU falls back to probing one at a time", async () => {
+    const skuError = () =>
+      new Response(JSON.stringify({ errors: [{ errorId: 25710, message: "This is an invalid value for a SKU. Only alphanumeric characters can be used for SKUs, and their length must not exceed 50 characters" }] }), { status: 400, headers: { "content-type": "application/json" } });
+    const good = (n: number) => ({ offerId: `o-${n}`, sku: `good-${n}`, status: "PUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: String(100 + n) }, pricingSummary: { price: { value: "9.99", currency: "USD" } } });
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url));
+      if (u.pathname.includes("/offer")) {
+        const limit = Number(u.searchParams.get("limit"));
+        const offset = Number(u.searchParams.get("offset"));
+        // The bulk page is poisoned by the bad offer, so eBay 400s it.
+        if (limit > 1) return skuError();
+        // Probing one at a time: offset 1 is the poisoned offer.
+        if (offset === 1) return skuError();
+        if (offset === 0) return Response.json({ total: 3, offers: [good(0)] });
+        if (offset === 2) return Response.json({ total: 3, offers: [good(2)] });
+        return Response.json({ total: 3, offers: [] });
+      }
+      return Response.json(inventoryItem);
+    };
+    const page = await fetchPublishedOffersPage("test-token", 0, 100);
+    expect(page.items.map((i) => i.itemId)).toEqual(["100", "102"]);
+    expect(page.skipped).toBe(1);
+    expect(page.total).toBe(3);
+    globalThis.fetch = realFetch;
+  });
+
   test("SKUs stored from sync are sanitized", async () => {
     globalThis.fetch = async (url) => {
       if (String(url).includes("/offer?")) {

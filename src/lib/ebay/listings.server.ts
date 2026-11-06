@@ -12,6 +12,12 @@ import { mapOfferToActiveListing } from "./contracts";
 // Documented loss vs Trading API: quantitySold and watchCount are not
 // exposed by the Inventory API, so sync must preserve stored values.
 
+function isSkuListError(e: unknown): boolean {
+  const status = (e as any)?.status;
+  const msg = e instanceof Error ? e.message : String(e);
+  return status === 400 && /SKU/i.test(msg);
+}
+
 export async function fetchPublishedOffersPage(
   accessToken: string,
   offset = 0,
@@ -26,10 +32,34 @@ export async function fetchPublishedOffersPage(
   let total = 0;
   let skipped = 0;
   const items: EbayActiveListing[] = [];
-  for (let guard = 0; guard < 20 && items.length < capped; guard++) {
-    const page = await client.json<{ total: number; offers: OfferRecord[] }>(
-      `/sell/inventory/v1/offer?limit=${capped}&offset=${cursor}`,
-    );
+  // eBay validates SKUs when serving the offer list, so ONE existing offer
+  // with an invalid SKU (spaces, slashes, >50 chars — e.g. created by
+  // another tool before this app) makes the whole bulk list call fail
+  // with 400 "invalid value for a SKU". When that happens, fall back to
+  // probing one offer at a time: the poisoned offer's page fails alone
+  // and the good offers still sync.
+  let probing = false;
+  for (let guard = 0; guard < (probing ? 200 : 20) && items.length < capped; guard++) {
+    const pageSize = probing ? 1 : capped;
+    let page: { total: number; offers: OfferRecord[] };
+    try {
+      page = await client.json<{ total: number; offers: OfferRecord[] }>(
+        `/sell/inventory/v1/offer?limit=${pageSize}&offset=${cursor}`,
+      );
+    } catch (e) {
+      if (isSkuListError(e) && !probing) {
+        // Retry the same cursor one offer at a time so no offer is lost.
+        probing = true;
+        continue;
+      }
+      if (isSkuListError(e) && probing) {
+        // This single offer is the poisoned one — skip it and move on.
+        skipped += 1;
+        cursor += 1;
+        continue;
+      }
+      throw e;
+    }
     total = page.total || 0;
     const offers = page.offers || [];
     if (!offers.length) break;
@@ -59,6 +89,9 @@ export async function fetchPublishedOffersPage(
     }
     if (cursor >= total) break;
   }
+  // In probing mode the bulk call never reported a total, so report the
+  // number of offers actually encountered instead of a stale 0.
+  if (probing) total = items.length + skipped;
   return { total, items, nextOffset: cursor, skipped };
 }
 
