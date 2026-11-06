@@ -255,8 +255,12 @@ async function syncEbayListingsInner(data: { entriesPerPage?: number }, context:
     if (totalSynced === 0 && !retrievedAnyOfferData) {
       const viaInventory = await fetchPublishedOffersViaInventory(token);
       usedInventoryFallback = true;
+      // The inventory phase re-examines the same underlying offers the
+      // probing phase could not retrieve, so its counts supersede the
+      // probing phase's — carrying both over double-counts (e.g. "653
+      // skipped" against "454 total").
       grandTotal = viaInventory.total;
-      totalSkipped += viaInventory.skipped;
+      totalSkipped = viaInventory.skipped;
       for (const item of viaInventory.items) await upsertItem(item);
       totalSynced += viaInventory.items.length;
     }
