@@ -96,6 +96,17 @@ function RootShell({ children }: { children: ReactNode }) {
     <html lang="en">
       <head><HeadContent /></head>
       <body>
+        {/* Boot shell (bug 17): a hard reload shows this instead of a blank
+            white page while the JS bundle loads. React removes it on mount;
+            the inline fallback hides it if JS never runs, so the SSR content
+            is never trapped behind it. */}
+        <div id="boot-shell" style={{ position: "fixed", inset: 0, zIndex: 9999, display: "flex", alignItems: "center", justifyContent: "center", background: "#ffffff", color: "#666666", fontFamily: "system-ui, -apple-system, sans-serif" }}>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 22, fontWeight: 800, color: "#111111", letterSpacing: "-0.02em" }}>DropList</div>
+            <div style={{ marginTop: 8, fontSize: 13 }}>Loading…</div>
+          </div>
+        </div>
+        <script dangerouslySetInnerHTML={{ __html: "setTimeout(function(){var s=document.getElementById('boot-shell');if(s)s.style.display='none'},5000);" }} />
         {children}
         <Scripts />
       </body>
@@ -108,6 +119,8 @@ function RootComponent() {
   const router = useRouter();
 
   useEffect(() => {
+    // App mounted — remove the boot shell (bug 17).
+    document.getElementById("boot-shell")?.remove();
     const { data } = supabase.auth.onAuthStateChange((event) => {
       if (event !== "SIGNED_IN" && event !== "SIGNED_OUT" && event !== "USER_UPDATED") return;
       router.invalidate();

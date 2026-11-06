@@ -1,4 +1,5 @@
 import { EbayRestClient } from "./rest.server";
+import { EbayError } from "./http";
 import type { Dispute, Order, Page, ReturnRecord, ShippingFulfillmentInput } from "./contracts";
 import { shippingFulfillmentPayload } from "./contracts";
 
@@ -9,8 +10,19 @@ export class EbayOrderService {
     if (status !== "ALL") query.set("filter", `orderfulfillmentstatus:{${status}}`);
     return this.client.json<Page<{ orders: Order[] }>>(`/sell/fulfillment/v1/order?${query}`);
   }
-  disputes(offset = 0) {
-    return this.client.json<Page<{ paymentDisputeSummaries: Dispute[] }>>(`/sell/fulfillment/v1/payment_dispute_summary?limit=50&offset=${offset}`);
+  /**
+   * eBay returns 404 from payment_dispute_summary when the seller has no
+   * disputes at all — that is an empty list, not an error. Swallow 404
+   * here so the Orders tab shows a proper empty state instead of
+   * "eBay request failed".
+   */
+  async disputes(offset = 0): Promise<Page<{ paymentDisputeSummaries: Dispute[] }>> {
+    try {
+      return await this.client.json<Page<{ paymentDisputeSummaries: Dispute[] }>>(`/sell/fulfillment/v1/payment_dispute_summary?limit=50&offset=${offset}`);
+    } catch (e) {
+      if (e instanceof EbayError && e.status === 404) return { paymentDisputeSummaries: [], total: 0 };
+      throw e;
+    }
   }
   order(id: string) { return this.client.json<Order>(`/sell/fulfillment/v1/order/${encodeURIComponent(id)}`); }
   /**

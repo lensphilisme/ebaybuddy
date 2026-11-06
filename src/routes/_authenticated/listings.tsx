@@ -27,10 +27,10 @@ function ListingsPage() {
     if (error) throw error; return data || [];
   }});
   const rows = Array.from(new Map(data.map((l: any) => [l.ebay_item_id || l.id, l])).values());
-  const sync = useMutation({ mutationFn: () => syncFn({ data: { entriesPerPage: 200 } }), onSuccess: (r: any) => { toast.success(`Synced ${r.synced || 0} of ${r.total || 0} active listings`); refetch(); }, onError: (e: Error) => toast.error(e.message) });
+  const sync = useMutation({ mutationFn: () => syncFn({ data: { entriesPerPage: 200 } }), onSuccess: (r: any) => { toast.success(`Synced ${r.synced || 0} of ${r.total || 0} active listings${r.skipped ? ` · ${r.skipped} skipped (bad data)` : ""}`); refetch(); }, onError: (e: Error) => toast.error(e.message) });
   const end = useMutation({ mutationFn: (id: string) => endFn({ data: { listingId: id } }), onSuccess: () => { toast.success("Listing ended"); setEndId(null); refetch(); }, onError: (e: Error) => toast.error(e.message) });
   return <AppShell title="Active listings" subtitle="Your live eBay listings, synced from your connected account">
-    <div className="mb-4 flex items-center justify-between flex-wrap gap-3"><Button onClick={() => sync.mutate()} disabled={sync.isPending}><DownloadCloud className="h-4 w-4 mr-1" />{sync.isPending ? "Syncing…" : "Sync all from eBay"}</Button><div className="text-sm text-muted-foreground">{rows.length} listing{rows.length === 1 ? "" : "s"} stored</div></div>
+    <div className="mb-4 flex items-center justify-between flex-wrap gap-3"><Button onClick={() => sync.mutate()} disabled={sync.isPending}><DownloadCloud className="h-4 w-4 mr-1" />{sync.isPending ? "Syncing…" : "Sync all from eBay"}</Button><div className="text-sm text-muted-foreground">{`${rows.length} listing${rows.length === 1 ? "" : "s"} stored`}</div></div>
     <p className="text-xs text-muted-foreground mb-4">Sales and views are 30-day numbers from eBay Analytics — they refresh when you sync. "—" means traffic has never been fetched for that listing.</p>
     <Card className="overflow-hidden">
       {isLoading ? <div className="p-10"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : rows.length === 0 ? (
@@ -58,7 +58,7 @@ function ListingsPage() {
         </div>
       )}
     </Card>
-    <div className="mt-4 flex items-center justify-between"><span className="text-sm text-muted-foreground">Page {page + 1} of {Math.max(1, Math.ceil(rows.length / 50))}</span><div className="flex gap-2"><Button variant="outline" size="icon" aria-label="Previous listings" disabled={page === 0} onClick={() => setPage(page - 1)}><ChevronLeft className="h-4 w-4" /></Button><Button variant="outline" size="icon" aria-label="Next listings" disabled={(page + 1) * 50 >= rows.length} onClick={() => setPage(page + 1)}><ChevronRight className="h-4 w-4" /></Button></div></div>
+    <div className="mt-4 flex items-center justify-between"><span className="text-sm text-muted-foreground">{`Page ${page + 1} of ${Math.max(1, Math.ceil(rows.length / 50))}`}</span><div className="flex gap-2"><Button variant="outline" size="icon" aria-label="Previous listings" disabled={page === 0} onClick={() => setPage(page - 1)}><ChevronLeft className="h-4 w-4" /></Button><Button variant="outline" size="icon" aria-label="Next listings" disabled={(page + 1) * 50 >= rows.length} onClick={() => setPage(page + 1)}><ChevronRight className="h-4 w-4" /></Button></div></div>
     <AlertDialog open={endId !== null} onOpenChange={(open) => !open && setEndId(null)}>
       <AlertDialogContent>
         <AlertDialogHeader>

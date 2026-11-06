@@ -19,6 +19,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import DOMPurify from "dompurify";
+import { roundMoney } from "@/lib/pricing";
 
 export const Route = createFileRoute("/_authenticated/drafts")({ head: () => pageHead("Listing drafts", "Edit and repair CJ-to-eBay listing drafts."), component: DraftsPage });
 
@@ -69,12 +71,55 @@ function profitText(draft: any) {
   return `$${amount.toFixed(2)} profit${fee ? ` · $${fee.toFixed(2)} fee` : ""}`;
 }
 
+/** CJ descriptions are third-party HTML: render sanitized HTML, never the
+ * raw markup as text (bug 8). Same DOMPurify pattern as the product page. */
+function DraftDescription({ html }: { html: string }) {
+  const clean = useMemo(() => {
+    if (!html || typeof window === "undefined") return "";
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+  }, [html]);
+  if (!html) return <div className="line-clamp-3 text-xs text-muted-foreground">No description yet.</div>;
+  return <div className="line-clamp-3 text-xs text-muted-foreground break-words [&_*]:max-w-full [&_img]:h-auto" dangerouslySetInnerHTML={{ __html: clean }} />;
+}
+
+/**
+ * Rank category suggestions so the most relevant leaf is first (bug 16):
+ * score by token overlap with the draft title/description, drop
+ * suggestions that share nothing with the product when better ones exist,
+ * and dedupe identical-looking leaves so two buttons never look the same.
+ */
+function rankSuggestions(rows: any[], draft: any) {
+  const hint = `${draft?.title || ""} ${draft?.description || ""} ${draft?.item_specifics?.Type || ""}`.toLowerCase();
+  const tokens = new Set(hint.split(/[^a-z0-9]+/).filter((t) => t.length > 2));
+  const scored = (rows || []).map((c) => {
+    const path = String(c.path || c.categoryName || "");
+    const leaf = path.split(">").map((s) => s.trim()).filter(Boolean).pop() || path;
+    const pathTokens = new Set(path.toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length > 2));
+    let overlap = 0;
+    pathTokens.forEach((t) => { if (tokens.has(t)) overlap += 1; });
+    return { ...c, path, leaf, overlap };
+  });
+  const best = Math.max(0, ...scored.map((s) => s.overlap));
+  const filtered = best > 0 ? scored.filter((s) => s.overlap > 0) : scored;
+  const seen = new Set<string>();
+  return filtered
+    .sort((a, b) => b.overlap - a.overlap || a.path.length - b.path.length)
+    .filter((s) => {
+      const key = s.leaf.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
 function DraftsPage() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [suggestions, setSuggestions] = useState<Record<string, any[]>>({});
   const [editDraft, setEditDraft] = useState<any | null>(null);
   const [confirmRepair, setConfirmRepair] = useState(false);
   const [confirmDeleteIds, setConfirmDeleteIds] = useState<string[] | null>(null);
+  // Push confirmation (bug 3): the ids awaiting the "goes LIVE" dialog.
+  const [confirmPushIds, setConfirmPushIds] = useState<string[] | null>(null);
   const optimizeFn = useServerFn(optimizeDraftWithAi);
   const optimizeCopyFn = useServerFn(optimizeDraftCopyWithAi);
   const repairFn = useServerFn(repairDraftForEbay);
@@ -92,6 +137,22 @@ function DraftsPage() {
   });
   const selectedIds = useMemo(() => Object.keys(selected).filter((id) => selected[id]), [selected]);
   const failedIds = useMemo(() => drafts.filter((d: any) => d.status === "failed").map((d: any) => d.id), [drafts]);
+  // Live Push state (bug 4): read the same automation_rules row the Rules
+  // page uses. The server refuses to publish when this is off; the button
+  // mirrors that so the user is told before clicking, not after.
+  const { data: livePushRule } = useQuery({
+    queryKey: ["automation-rules-live-push"],
+    queryFn: async () => {
+      const { data } = await supabase.from("automation_rules").select("live_listing_enabled").maybeSingle();
+      return data || null;
+    },
+    staleTime: 60_000,
+  });
+  const livePushOn = livePushRule?.live_listing_enabled === true;
+  const confirmPushDrafts = useMemo(
+    () => (confirmPushIds || []).map((id) => drafts.find((d: any) => d.id === id)).filter(Boolean),
+    [confirmPushIds, drafts],
+  );
   // Push requires an eBay category per draft — the server marks category-less
   // drafts failed, so block the button and say why instead of failing after.
   const selectedMissingCategory = useMemo(
@@ -132,7 +193,15 @@ function DraftsPage() {
   const push = useMutation({
     mutationFn: async (ids: string[]) => pushFn({ data: { draftIds: ids } }),
     onSuccess: (rows: any[]) => {
-      toast.success(`Pushed ${rows.filter((r) => r.ok).length}/${rows.length} draft(s)`);
+      // A failed push must never look like a success (bug 5): 0 of N is an
+      // ERROR with the actual eBay reason, a partial push is a warning
+      // with counts + reason, only all-succeed is a success toast.
+      const okCount = rows.filter((r) => r.ok).length;
+      const failed = rows.filter((r) => !r.ok);
+      const firstError = failed[0]?.error;
+      if (failed.length === 0) toast.success(`Pushed ${okCount} draft${okCount === 1 ? "" : "s"} to eBay`);
+      else if (okCount === 0) toast.error(`Push failed: ${firstError || "eBay rejected the draft"}`);
+      else toast.warning(`Pushed ${okCount} of ${rows.length} draft(s). Failed: ${firstError || "unknown error"}`);
       setSelected({});
       refetch();
     },
@@ -162,11 +231,14 @@ function DraftsPage() {
         <Button size="sm" disabled={!selectedIds.length || optimizeCopy.isPending} variant="outline" onClick={() => optimizeCopy.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Optimized</Button>
         <Button size="sm" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)}><Wrench className="h-4 w-4 mr-1" />Repair</Button>
         <Button size="sm" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => setConfirmRepair(true)}><Wrench className="h-4 w-4 mr-1" />Repair failed</Button>
-        <Button size="sm" disabled={!selectedIds.length || push.isPending || selectedMissingCategory.length > 0} onClick={() => push.mutate(selectedIds)}><Rocket className="h-4 w-4 mr-1" />Push</Button>
+        <Button size="sm" disabled={!selectedIds.length || push.isPending || selectedMissingCategory.length > 0 || !livePushOn} title={!livePushOn ? "Live push is off in Rules — turn it on to publish" : undefined} onClick={() => setConfirmPushIds(selectedIds)}><Rocket className="h-4 w-4 mr-1" />Push</Button>
         <Button size="sm" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => setConfirmDeleteIds(selectedIds)}><Trash2 className="h-4 w-4 mr-1" />Delete</Button>
       </div>
+      {!livePushOn && (
+        <p className="mb-3 text-xs text-amber-600">Live push is off in Rules — drafts can be prepared but nothing will be published. Turn on “Live Push to eBay” in Rules to enable Push.</p>
+      )}
       {selectedMissingCategory.length > 0 && (
-        <p className="mb-3 text-xs text-amber-600">{selectedMissingCategory.length} selected draft{selectedMissingCategory.length === 1 ? "" : "s"} still need{selectedMissingCategory.length === 1 ? "s" : ""} an eBay category ID — expand the draft and use "AI pick category" or "eBay category suggest", then Push unlocks.</p>
+        <p className="mb-3 text-xs text-amber-600">{`${selectedMissingCategory.length} selected draft${selectedMissingCategory.length === 1 ? "" : "s"} still need${selectedMissingCategory.length === 1 ? "s" : ""} an eBay category ID — expand the draft and use "AI pick category" or "eBay category suggest", then Push unlocks.`}</p>
       )}
 
       <Card className="overflow-hidden border shadow-sm">
@@ -189,7 +261,7 @@ function DraftsPage() {
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                         <span>${Number(d.price || 0).toFixed(2)}</span>
-                        <span>{variantCount(d)} variants</span>
+                        <span>{`${variantCount(d)} variant${variantCount(d) === 1 ? "" : "s"}`}</span>
                         <span>{profitText(d)}</span>
                       </div>
                     </div>
@@ -206,7 +278,7 @@ function DraftsPage() {
                           <DropdownMenuItem onClick={() => optimizeCopy.mutate([d.id])}>AI Optimized copy</DropdownMenuItem>
                           <DropdownMenuItem onClick={() => repair.mutate([d.id])}>Repair for eBay</DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => { if (!d.category_id) { toast.error("Add an eBay category ID first — expand the draft and use AI pick category or eBay suggest."); return; } push.mutate([d.id]); }}>Push to eBay</DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => { if (!d.category_id) { toast.error("Add an eBay category ID first — expand the draft and use AI pick category or eBay suggest."); return; } setConfirmPushIds([d.id]); }}>Push to eBay</DropdownMenuItem>
                           <DropdownMenuItem className="text-destructive" onClick={() => setConfirmDeleteIds([d.id])}>Delete draft</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -216,11 +288,18 @@ function DraftsPage() {
                     <div className="grid gap-3 border-t bg-muted/25 p-3 md:grid-cols-[1fr_280px]">
                       <div className="min-w-0 space-y-2">
                         <div className="text-sm font-medium break-words">{d.title}</div>
-                        <div className="line-clamp-3 text-xs text-muted-foreground break-words">{d.description || "No description yet."}</div>
+                        <DraftDescription html={d.description || ""} />
                       </div>
                       <div className="space-y-2">
                         <CategoryInput draftId={d.id} value={d.category_id || ""} onSave={updateDraft} />
-                        {suggestions[d.id]?.slice(0, 3).map((c) => <button key={c.categoryId} className="block w-full truncate text-left text-xs text-primary hover:underline" onClick={() => updateDraft(d.id, { category_id: c.categoryId })}>{c.path}</button>)}
+                        {rankSuggestions(suggestions[d.id], d).slice(0, 3).map((c: any) => {
+                          const parts = String(c.path).split(">").map((s: string) => s.trim()).filter(Boolean);
+                          return (
+                            <button key={c.categoryId} title={c.path} className="block w-full text-left text-xs text-primary hover:underline break-words whitespace-normal" onClick={() => updateDraft(d.id, { category_id: c.categoryId })}>
+                              {parts.length > 1 ? <span className="text-muted-foreground">{parts.slice(0, -1).join(" › ")} › </span> : null}<span className="font-semibold">{parts[parts.length - 1] || c.path}</span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   </CollapsibleContent>
@@ -233,24 +312,55 @@ function DraftsPage() {
       <AlertDialog open={confirmRepair} onOpenChange={setConfirmRepair}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Repair all {failedIds.length} failed draft{failedIds.length === 1 ? "" : "s"}?</AlertDialogTitle>
+            <AlertDialogTitle>{`Repair all ${failedIds.length} failed draft${failedIds.length === 1 ? "" : "s"}?`}</AlertDialogTitle>
             <AlertDialogDescription>Each failed draft is re-checked against CJ and eBay and its title, description, images and item specifics are rebuilt. Drafts that repair cleanly return to pending so you can push them again.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { setConfirmRepair(false); repair.mutate(failedIds); }}>Repair {failedIds.length} draft{failedIds.length === 1 ? "" : "s"}</AlertDialogAction>
+            <AlertDialogAction onClick={() => { setConfirmRepair(false); repair.mutate(failedIds); }}>{`Repair ${failedIds.length} draft${failedIds.length === 1 ? "" : "s"}`}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
       <AlertDialog open={confirmDeleteIds !== null} onOpenChange={(open) => !open && setConfirmDeleteIds(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {confirmDeleteIds?.length ?? 0} draft{(confirmDeleteIds?.length ?? 0) === 1 ? "" : "s"}?</AlertDialogTitle>
-            <AlertDialogDescription>This permanently removes the selected draft{(confirmDeleteIds?.length ?? 0) === 1 ? "" : "s"} from the queue. Listings already pushed to eBay are not affected.</AlertDialogDescription>
+            <AlertDialogTitle>{`Delete ${confirmDeleteIds?.length ?? 0} draft${(confirmDeleteIds?.length ?? 0) === 1 ? "" : "s"}?`}</AlertDialogTitle>
+            <AlertDialogDescription>{`This permanently removes the selected draft${(confirmDeleteIds?.length ?? 0) === 1 ? "" : "s"} from the queue. Listings already pushed to eBay are not affected.`}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => { if (confirmDeleteIds) bulkDelete.mutate(confirmDeleteIds); setConfirmDeleteIds(null); }}>Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      {/* Push confirmation (bug 3): publishing goes LIVE on eBay — show
+          exactly what is about to publish and require an explicit Publish. */}
+      <AlertDialog open={confirmPushIds !== null} onOpenChange={(open) => !open && setConfirmPushIds(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{`Publish ${confirmPushDrafts.length} draft${confirmPushDrafts.length === 1 ? "" : "s"} to eBay?`}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {livePushOn
+                ? "This will go LIVE on eBay immediately — the listing will be visible to buyers and charged eBay fees."
+                : "Live push is OFF in Rules, so publishing is blocked. Turn on “Live Push to eBay” in Rules, then come back to publish."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border p-3">
+            {confirmPushDrafts.map((d: any) => (
+              <div key={d.id} className="flex items-start justify-between gap-3 text-sm">
+                <span className="min-w-0 break-words">{d.title}</span>
+                <span className="shrink-0 font-semibold tabular-nums">${Number(d.price || 0).toFixed(2)}</span>
+              </div>
+            ))}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={!livePushOn || push.isPending}
+              onClick={() => { if (confirmPushIds) push.mutate(confirmPushIds); setConfirmPushIds(null); }}
+            >
+              {push.isPending ? "Publishing…" : "Publish"}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -268,7 +378,9 @@ function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; 
       id: draft.id,
       title: draft.title || "",
       description: draft.description || "",
-      price: draft.price || 0,
+      // Money fields must display at 2 decimals — a raw DB float renders
+      // as "15.989999771118164" otherwise (bug 11).
+      price: draft.price != null ? Number(draft.price).toFixed(2) : "",
       category_id: draft.category_id || "",
       brand: draft.brand || "",
       model: draft.model || "",
@@ -284,7 +396,7 @@ function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; 
       const patch = {
         title: String(form.title || "").slice(0, 80),
         description: String(form.description || "").slice(0, 500000),
-        price: Number(form.price || 0),
+        price: roundMoney(Number(form.price || 0)),
         category_id: String(form.category_id || "").trim() || null,
         brand: String(form.brand || "").trim() || null,
         model: String(form.model || "").trim() || null,

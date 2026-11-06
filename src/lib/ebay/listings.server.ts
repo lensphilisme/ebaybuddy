@@ -1,5 +1,5 @@
 import { EbayRestClient } from "./rest.server";
-import { EbayValidationError } from "./http";
+import { EbayValidationError, sanitizeSku } from "./http";
 import type { EbayActiveListing, InventoryRecord, OfferRecord } from "./contracts";
 import { mapOfferToActiveListing } from "./contracts";
 
@@ -16,7 +16,7 @@ export async function fetchPublishedOffersPage(
   accessToken: string,
   offset = 0,
   limit = 100,
-): Promise<{ total: number; items: EbayActiveListing[]; nextOffset: number }> {
+): Promise<{ total: number; items: EbayActiveListing[]; nextOffset: number; skipped: number }> {
   const client = new EbayRestClient(accessToken);
   const capped = Math.max(1, Math.min(limit, 100));
   // A page of offers can mix published and unpublished offers, so keep
@@ -24,6 +24,7 @@ export async function fetchPublishedOffersPage(
   // or offers are exhausted — otherwise sync would stop early.
   let cursor = Math.max(0, offset);
   let total = 0;
+  let skipped = 0;
   const items: EbayActiveListing[] = [];
   for (let guard = 0; guard < 20 && items.length < capped; guard++) {
     const page = await client.json<{ total: number; offers: OfferRecord[] }>(
@@ -37,20 +38,28 @@ export async function fetchPublishedOffersPage(
       // Advance only for source offers actually consumed, never the whole page.
       cursor += 1;
       if (offer.status && offer.status !== "PUBLISHED") continue;
-      let item: InventoryRecord | null = null;
+      // One bad offer (bad SKU, malformed inventory record, …) must not
+      // kill the whole sync — skip it, count it, keep going.
       try {
-        item = await client.json<InventoryRecord>(
-          `/sell/inventory/v1/inventory_item/${encodeURIComponent(offer.sku)}`,
-        );
-      } catch {
-        item = null;
+        let item: InventoryRecord | null = null;
+        try {
+          item = await client.json<InventoryRecord>(
+            `/sell/inventory/v1/inventory_item/${encodeURIComponent(sanitizeSku(offer.sku))}`,
+          );
+        } catch {
+          item = null;
+        }
+        const mapped = mapOfferToActiveListing(offer, item);
+        if (mapped) items.push(mapped);
+        else skipped += 1;
+      } catch (e) {
+        skipped += 1;
+        console.warn(`[ebay-sync] skipping offer ${offer.offerId ?? "?"} (sku ${offer.sku ?? "?"}): ${e instanceof Error ? e.message : String(e)}`);
       }
-      const mapped = mapOfferToActiveListing(offer, item);
-      if (mapped) items.push(mapped);
     }
     if (cursor >= total) break;
   }
-  return { total, items, nextOffset: cursor };
+  return { total, items, nextOffset: cursor, skipped };
 }
 
 export async function fetchActiveEbayListings(

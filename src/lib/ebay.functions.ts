@@ -185,6 +185,19 @@ export const syncEbayListings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { entriesPerPage?: number }) => data)
   .handler(async ({ data, context }: any) => {
+    // Sync failures used to vanish: the success row was the only one ever
+    // written, so a failed sync appeared in the Dashboard and then
+    // disappeared. Persist failures as error rows too (bug 7).
+    try {
+      return await syncEbayListingsInner(data, context);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "error", category: "ebay", message: `eBay sync failed: ${message}`, metadata: { error: message } });
+      throw e;
+    }
+  });
+
+async function syncEbayListingsInner(data: { entriesPerPage?: number }, context: any) {
     const token = await getFreshEbayToken(context.supabase, context.userId);
     // Modern Inventory API: 100 offers per page. The Inventory API does not
     // expose quantitySold / watchCount, so sales/views are refreshed from
@@ -193,12 +206,14 @@ export const syncEbayListings = createServerFn({ method: "POST" })
     const perPage = Math.min(data.entriesPerPage ?? 100, 100);
     let offset = 0;
     let totalSynced = 0;
+    let totalSkipped = 0;
     let grandTotal = 0;
     const syncedItemIds: string[] = [];
     while (true) {
       const result = await fetchPublishedOffersPage(token, offset, perPage);
       grandTotal = result.total;
       offset = result.nextOffset;
+      totalSkipped += result.skipped || 0;
       for (const item of result.items) {
         const row = {
           user_id: context.userId,
@@ -237,9 +252,9 @@ export const syncEbayListings = createServerFn({ method: "POST" })
     } catch (e) {
       traffic = { updated: 0, total: syncedItemIds.length, error: e instanceof Error ? e.message : String(e) };
     }
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)`, metadata: { total: grandTotal, synced: totalSynced, trafficUpdated: traffic.updated, trafficError: traffic.error || null } });
-    return { total: grandTotal, synced: totalSynced, trafficUpdated: traffic.updated, trafficError: traffic.error || null };
-  });
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)${totalSkipped ? `, ${totalSkipped} skipped (bad data)` : ""}`, metadata: { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null } });
+    return { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null };
+  }
 
 // Refresh views/clicks/sales from the eBay Analytics traffic report without
 // re-syncing offers. Used by the Optimizer page so a stale traffic stamp
@@ -281,6 +296,14 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { draftIds: string[] }) => data)
   .handler(async ({ data, context }: any) => {
+    // Server-side guardrail (bug 4): with "Live Push to eBay" OFF in Rules
+    // nothing may publish — a push attempted a real publish while OFF
+    // because this check did not exist. Read the row exactly the way the
+    // Rules page does and refuse before touching eBay.
+    const { data: rule } = await context.supabase.from("automation_rules").select("live_listing_enabled").eq("user_id", context.userId).maybeSingle();
+    if (!rule?.live_listing_enabled) {
+      throw new Error("Live push is off in Rules — turn it on to publish.");
+    }
     const token = await getFreshEbayToken(context.supabase, context.userId);
     const { data: drafts, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).in("id", data.draftIds);
     if (error) throw error;

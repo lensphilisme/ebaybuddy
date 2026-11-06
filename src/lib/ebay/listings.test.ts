@@ -92,3 +92,43 @@ describe("modern listings mapping", () => {
     ).toBe("ignored");
   });
 });
+
+describe("sync resilience (task B3)", () => {
+  test("an offer that cannot map is skipped and counted, not fatal", async () => {
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("/offer?")) {
+        return Response.json({
+          total: 2,
+          offers: [
+            { offerId: "o-good", sku: "good-1", status: "PUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "111" }, pricingSummary: { price: { value: "9.99", currency: "USD" } } },
+            // Published but no listingId: mapOfferToActiveListing returns null.
+            { offerId: "o-bad", sku: "bad sku/with spaces", status: "PUBLISHED", marketplaceId: "EBAY_US", pricingSummary: { price: { value: "1.00", currency: "USD" } } },
+          ],
+        });
+      }
+      return Response.json(inventoryItem);
+    };
+    const page = await fetchPublishedOffersPage("test-token", 0, 100);
+    expect(page.items.length).toBe(1);
+    expect(page.items[0].itemId).toBe("111");
+    expect(page.skipped).toBe(1);
+    globalThis.fetch = realFetch;
+  });
+
+  test("SKUs stored from sync are sanitized", async () => {
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("/offer?")) {
+        return Response.json({
+          total: 1,
+          offers: [
+            { offerId: "o-1", sku: "bad sku/with spaces", status: "PUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "222" }, pricingSummary: { price: { value: "5.00", currency: "USD" } } },
+          ],
+        });
+      }
+      return Response.json(inventoryItem);
+    };
+    const page = await fetchPublishedOffersPage("test-token", 0, 100);
+    expect(page.items[0].sku).toBe("badskuwithspaces");
+    globalThis.fetch = realFetch;
+  });
+});

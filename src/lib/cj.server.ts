@@ -1,6 +1,7 @@
 // Server-only CJ Dropshipping Open API client.
 // Docs: https://developers.cjdropshipping.com/en/api/
 import { resolveUserCjToken } from "./cj-auth.server";
+import { parseMoney } from "./pricing";
 
 const CJ_BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 
@@ -140,7 +141,9 @@ export async function cjSearchProducts(params: {
     productNameEn: p.nameEn || "",
     productSku: p.sku || "",
     productImage: p.bigImage || "",
-    sellPrice: p.sellPrice ?? 0,
+    // CJ returns sellPrice as a number, a numeric string, or a string with
+    // a currency symbol — parse defensively so the grid never shows $NaN.
+    sellPrice: parseMoney(p.sellPrice),
     categoryId: p.categoryId,
     categoryName: p.threeCategoryName,
     listedNum: p.listedNum,
@@ -185,6 +188,9 @@ export type CjProductDetail = {
   productKeyEn?: string;
   productProEnSet?: string[];
   packingWeight?: string | number;
+  // CJ sometimes returns a brand on the detail object; draft creation
+  // uses it for the eBay Brand specific (falls back to "Unbranded").
+  brand?: string;
   variants?: CjVariant[];
   // some endpoints return "variantList" or "productVariants"
   variantList?: CjVariant[];

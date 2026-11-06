@@ -9,8 +9,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ChevronLeft, ChevronRight, RefreshCw, Package, ExternalLink, Undo2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, RefreshCw, Package, ExternalLink, Undo2, Loader2, ShieldCheck } from "lucide-react";
 import { pageHead } from "@/lib/page-head";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/orders")({ head: () => pageHead("Orders & disputes", "View connected eBay orders, fulfillment status and payment disputes."), component: OrdersPage });
 
@@ -26,7 +27,16 @@ function OrdersPage() {
   const returns = useQuery({ queryKey: ["ebay-returns", offset], queryFn: () => returnsFn({ data: { offset } }), enabled: view === "returns", retry: false });
   const active = view === "orders" ? orders : view === "disputes" ? disputes : returns;
   const total = active.data?.total || 0;
-  return <AppShell title="Orders & disputes" subtitle="Sales and fulfillment from your eBay account" actions={<Button variant="ghost" size="icon" aria-label="Refresh orders" onClick={() => active.refetch()}><RefreshCw className="h-4 w-4" /></Button>}>
+  // The old icon-only button collapsed to a bare icon and gave no feedback
+  // (a stuck isPending could leave it that way across navigations). Always
+  // show the label, spin while fetching, and toast the outcome — the
+  // fetching flag always resets because refetch() settles on its own.
+  const refresh = async () => {
+    const result = await active.refetch();
+    if (result.isError) toast.error(`Refresh failed: ${(result.error as Error)?.message || "eBay request failed"}`);
+    else toast.success(`${view === "orders" ? "Orders" : view === "disputes" ? "Payment disputes" : "Returns"} refreshed`);
+  };
+  return <AppShell title="Orders & disputes" subtitle="Sales and fulfillment from your eBay account" actions={<Button variant="outline" size="sm" onClick={refresh} disabled={active.isFetching}>{active.isFetching ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}Refresh</Button>}>
     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
       <Tabs value={view} onValueChange={(value) => { setView(value); setOffset(0); }}><TabsList><TabsTrigger value="orders">Orders</TabsTrigger><TabsTrigger value="disputes">Payment disputes</TabsTrigger><TabsTrigger value="returns">Returns</TabsTrigger></TabsList></Tabs>
       {view === "orders" && <Select value={status} onValueChange={(value) => { setStatus(value); setOffset(0); }}><SelectTrigger className="w-48" aria-label="Fulfillment status"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="ALL">All orders</SelectItem><SelectItem value="NOT_STARTED">Not started</SelectItem><SelectItem value="IN_PROGRESS">In progress</SelectItem><SelectItem value="FULFILLED">Fulfilled</SelectItem></SelectContent></Select>}
@@ -45,7 +55,7 @@ function OrdersPage() {
         </div>
         <Button asChild variant="outline" size="sm"><a href="https://www.ebay.com/sh/ord/return" target="_blank" rel="noreferrer">Handle on eBay<ExternalLink className="ml-2 h-3 w-3" /></a></Button>
       </article>)}
-      {total === 0 && <div className="py-16 text-center text-muted-foreground">{view === "returns" ? <Undo2 className="mx-auto mb-3 h-8 w-8" /> : <Package className="mx-auto mb-3 h-8 w-8" />}No {view} found.</div>}
+      {total === 0 && <div className="py-16 text-center text-muted-foreground">{view === "returns" ? <Undo2 className="mx-auto mb-3 h-8 w-8" /> : view === "disputes" ? <ShieldCheck className="mx-auto mb-3 h-8 w-8" /> : <Package className="mx-auto mb-3 h-8 w-8" />}{view === "disputes" ? "No payment disputes — you're all clear." : `No ${view} found.`}</div>}
     </div>}
     <div className="mt-5 flex items-center justify-between"><span className="text-sm text-muted-foreground">{total ? `${offset + 1}–${Math.min(offset + 50, total)} of ${total}` : "0 results"}</span><div className="flex gap-2"><Button variant="outline" size="icon" aria-label="Previous page" disabled={offset === 0 || active.isFetching} onClick={() => setOffset(Math.max(0, offset - 50))}><ChevronLeft className="h-4 w-4" /></Button><Button variant="outline" size="icon" aria-label="Next page" disabled={offset + 50 >= total || active.isFetching} onClick={() => setOffset(offset + 50)}><ChevronRight className="h-4 w-4" /></Button></div></div>
   </AppShell>;

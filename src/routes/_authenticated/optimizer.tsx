@@ -22,7 +22,7 @@ function OptimizerPage() {
   // The last run's summary — drives the "Flagged to end" card and the
   // dry-run vs applied label. Status "flagged_end" is never written to the
   // database, so counting rows by it would always read 0.
-  const [lastRun, setLastRun] = useState<{ dryRun: boolean; flaggedEnd: number } | null>(null);
+  const [lastRun, setLastRun] = useState<{ dryRun: boolean; flaggedEnd: number; at: string } | null>(null);
 
   const { data: listings = [], refetch } = useQuery({
     queryKey: ["ebay-listings-optimizer"],
@@ -45,7 +45,7 @@ function OptimizerPage() {
     mutationFn: (dryRun: boolean) => runFn({ data: { dryRun } }),
     onSuccess: (rows: any[], dryRun) => {
       setActions(rows);
-      setLastRun({ dryRun, flaggedEnd: rows.filter((r: any) => r.action === "end_recommended" || r.action === "ended").length });
+      setLastRun({ dryRun, flaggedEnd: rows.filter((r: any) => r.action === "end_recommended" || r.action === "ended").length, at: new Date().toISOString() });
       const failed = rows.filter((row) => row.error).length;
       if (failed) toast.error(`${failed} action(s) failed; check the details below.`);
       else toast.success(`${dryRun ? "Preview" : "Applied"} · ${rows.length} action(s)`);
@@ -66,19 +66,19 @@ function OptimizerPage() {
 
   return (
     <AppShell title="Optimizer" subtitle="AI-driven rules that end dead listings and rewrite low-CTR titles">
-      <div className="grid grid-cols-3 gap-3 mb-5">
-        <Card className="p-4">
-          <div className="text-xs text-muted-foreground">Active listings</div>
-          <div className="text-2xl font-semibold">{listings.filter((l: any) => l.status === "active").length}</div>
+      <div className="grid grid-cols-3 gap-2 sm:gap-3 mb-5">
+        <Card className="p-3 sm:p-4 min-w-0">
+          <div className="text-xs text-muted-foreground truncate">Active listings</div>
+          <div className="text-xl sm:text-2xl font-semibold tabular-nums">{listings.filter((l: any) => l.status === "active").length}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs text-muted-foreground">Flagged to end</div>
-          <div className="text-2xl font-semibold">{lastRun ? lastRun.flaggedEnd : "—"}</div>
+        <Card className="p-3 sm:p-4 min-w-0">
+          <div className="text-xs text-muted-foreground truncate">Flagged to end</div>
+          <div className="text-xl sm:text-2xl font-semibold tabular-nums">{lastRun ? lastRun.flaggedEnd : "—"}</div>
           <div className="text-[11px] text-muted-foreground">{lastRun ? "from latest run" : "run a preview first"}</div>
         </Card>
-        <Card className="p-4">
-          <div className="text-xs text-muted-foreground">Total sales</div>
-          <div className="text-2xl font-semibold">{listings.reduce((s: number, l: any) => s + (l.sales || 0), 0)}</div>
+        <Card className="p-3 sm:p-4 min-w-0">
+          <div className="text-xs text-muted-foreground truncate">Total sales</div>
+          <div className="text-xl sm:text-2xl font-semibold tabular-nums">{listings.reduce((s: number, l: any) => s + (l.sales || 0), 0)}</div>
         </Card>
       </div>
 
@@ -113,7 +113,13 @@ function OptimizerPage() {
         {actions.length === 0 ? (
           <div className="p-10 text-center text-sm text-muted-foreground">
             <LineChart className="h-8 w-8 mx-auto mb-2 opacity-60" />
-            No actions yet. Click <strong>Preview AI actions</strong> to scan active listings for bad titles, low exposure, no views, no clicks and no sales.
+            {lastRun ? (
+              // A scan ran and found nothing to do (bug 20) — say so with
+              // the scan time instead of the pre-scan prompt.
+              <span>{`Scan complete — no actions needed right now${lastRun.dryRun ? " (preview)" : ""}. Last scan ${new Date(lastRun.at).toLocaleString()}.`}</span>
+            ) : (
+              <span>No actions yet. Click <strong>Preview AI actions</strong> to scan active listings for bad titles, low exposure, no views, no clicks and no sales.</span>
+            )}
           </div>
         ) : (
           <Table>

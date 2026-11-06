@@ -36,9 +36,14 @@ function SettingsPage() {
   const subsFn = useServerFn(listEbayNotificationSubscriptions);
   const subscribeFn = useServerFn(createEbayNotificationSubscription);
 
+  // Refetch on every mount (bug 14): after the OAuth callback lands on
+  // Settings, the cached "not connected" status must not linger — the
+  // callback invalidates this query AND mounting re-reads it, so the
+  // connected state shows immediately without a manual reload.
   const { data: status, refetch } = useQuery({
     queryKey: ["integration-status"],
     queryFn: () => statusFn(),
+    refetchOnMount: "always",
   });
   const { data: aiStatus, refetch: refetchAi } = useQuery({
     queryKey: ["ai-provider-status"],
@@ -114,7 +119,7 @@ function SettingsPage() {
         >
           <div className="space-y-2">
             <div className="flex gap-2">
-              <Input type="password" autoComplete="off" aria-label="CJ API key" value={cjApiKey} onChange={(e) => setCjApiKey(e.target.value)} placeholder="CJ API key" />
+              <Input type="password" autoComplete="off" aria-label="CJ API key" value={cjApiKey} onChange={(e) => setCjApiKey(e.target.value)} placeholder="CJ API key" className="min-w-0 flex-1" />
               <Button onClick={() => saveCj.mutate()} disabled={!cjApiKey.trim() || saveCj.isPending}>{saveCj.isPending ? "Verifying…" : "Connect"}</Button>
             </div>
             <p className="text-xs text-muted-foreground">
@@ -144,7 +149,7 @@ function SettingsPage() {
               If you connected eBay before Nov 2026, reconnect once — the app now also asks for notification and fulfillment access (returns and order updates).
             </p>
             <div className="flex gap-2">
-              <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Optional: paste authorization code" />
+              <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="Optional: paste authorization code" className="min-w-0 flex-1" />
               <Button onClick={() => connect.mutate()} disabled={!code || connect.isPending}>Save</Button>
             </div>
             <div className="mt-2 rounded-md border bg-muted/40 p-3 text-xs space-y-1">
@@ -166,9 +171,9 @@ function SettingsPage() {
           ready={!!aiStatus?.connected}
         >
           <div className="space-y-2">
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <Select value={aiProvider} onValueChange={(v) => { setAiProvider(v); setAiModel(""); }}>
-                <SelectTrigger aria-label="AI provider" className="w-56"><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label="AI provider" className="w-full sm:w-56"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {Object.entries(aiProviderMeta).map(([id, meta]) => (
                     <SelectItem key={id} value={id}>{meta.label}</SelectItem>
@@ -180,13 +185,14 @@ function SettingsPage() {
                 value={aiModel}
                 onChange={(e) => setAiModel(e.target.value)}
                 placeholder={aiMeta.defaultModel || "model name"}
+                className="min-w-0 flex-1"
               />
             </div>
             {aiProvider === "custom" && (
               <Input aria-label="Custom base URL" value={aiBaseUrl} onChange={(e) => setAiBaseUrl(e.target.value)} placeholder="https://your-endpoint.example/v1" />
             )}
-            <div className="flex gap-2">
-              <Input type="password" autoComplete="off" aria-label="AI API key" value={aiKey} onChange={(e) => setAiKey(e.target.value)} placeholder={aiStatus?.connected ? "Paste a new key to replace the saved one" : "Paste your API key"} />
+            <div className="flex flex-wrap gap-2">
+              <Input type="password" autoComplete="off" aria-label="AI API key" value={aiKey} onChange={(e) => setAiKey(e.target.value)} placeholder={aiStatus?.connected ? "Paste a new key to replace the saved one" : "Paste your API key"} className="min-w-0 flex-1" />
               <Button onClick={() => saveAi.mutate()} disabled={!aiKey.trim() || saveAi.isPending}>{saveAi.isPending ? "Testing…" : aiStatus?.connected ? "Replace key" : "Connect"}</Button>
               {aiStatus?.connected && aiStatus?.source === "user" && (
                 <Button variant="outline" onClick={() => removeAi.mutate()} disabled={removeAi.isPending}>Remove</Button>
@@ -216,7 +222,7 @@ function SettingsPage() {
               eBay can push order, sale and return events to this app the moment they happen. The app receives them at its public webhook address; subscribing to a topic tells eBay to send that event here.
             </CardDescription>
           </div>
-          <span className="rounded-full bg-muted text-muted-foreground text-xs px-2 py-0.5 font-medium">{(subs?.subscriptions || []).length} subscribed</span>
+          <span className="rounded-full bg-muted text-muted-foreground text-xs px-2 py-0.5 font-medium">{`${(subs?.subscriptions || []).length} subscribed`}</span>
         </CardHeader>
         <CardContent className="space-y-4">
           {topicsError && <p className="text-sm text-destructive">Could not load eBay topics: {(topicsError as Error).message}</p>}

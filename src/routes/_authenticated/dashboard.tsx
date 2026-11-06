@@ -52,28 +52,36 @@ function DashboardPage() {
   });
 
   // Full activity log lives here now (the old /logs page was merged in):
-  // same activity_logs table, 200 rows, with category + level filters.
-  const { data: logs = [], isLoading: logsLoading } = useQuery({
-    queryKey: ["dashboard-activity-logs", logCategory, logLevel],
+  // 200 rows, fetched unfiltered and filtered client-side with normalized
+  // (lowercase) values. The old server-side .eq() filter could show
+  // "No activity yet" while matching rows were visible — the category list
+  // was derived from the already-filtered rows, so the filter and the rows
+  // could disagree. Client-side filtering makes them match by construction.
+  const { data: allLogs = [], isLoading: logsLoading } = useQuery({
+    queryKey: ["dashboard-activity-logs"],
     queryFn: async () => {
-      let q = supabase.from("activity_logs").select("*").order("created_at", { ascending: false }).limit(200);
-      if (logCategory !== "all") q = q.eq("category", logCategory);
-      if (logLevel !== "all") q = q.eq("level", logLevel as "info" | "warn" | "error" | "success");
-      const { data, error } = await q;
+      const { data, error } = await supabase.from("activity_logs").select("*").order("created_at", { ascending: false }).limit(200);
       if (error) throw error;
       return data || [];
     },
     refetchInterval: 30_000,
   });
   const logCategories = useMemo(() => {
-    const extra = Array.from(new Set(logs.map((l: any) => l.category).filter(Boolean)));
+    const extra = Array.from(new Set(allLogs.map((l: any) => String(l.category || "").toLowerCase().trim()).filter(Boolean)));
     return Array.from(new Set([...KNOWN_LOG_CATEGORIES, ...extra]));
-  }, [logs]);
+  }, [allLogs]);
+  const logs = useMemo(() => allLogs.filter((l: any) => {
+    const cat = String(l.category || "").toLowerCase().trim();
+    const lvl = String(l.level || "").toLowerCase().trim();
+    if (logCategory !== "all" && cat !== logCategory.toLowerCase()) return false;
+    if (logLevel !== "all" && lvl !== logLevel.toLowerCase()) return false;
+    return true;
+  }), [allLogs, logCategory, logLevel]);
 
   const sync = useMutation({
     mutationFn: () => syncFn({ data: { entriesPerPage: 200 } }),
     onSuccess: (r: any) => {
-      toast.success(`Synced ${r.synced || 0} of ${r.total || 0} active listings${r.trafficUpdated ? ` · traffic refreshed for ${r.trafficUpdated}` : ""}${r.trafficError ? " · traffic refresh failed, optimizer data may be stale" : ""}`);
+      toast.success(`Synced ${r.synced || 0} of ${r.total || 0} active listings${r.skipped ? ` · ${r.skipped} skipped (bad data)` : ""}${r.trafficUpdated ? ` · traffic refreshed for ${r.trafficUpdated}` : ""}${r.trafficError ? " · traffic refresh failed, optimizer data may be stale" : ""}`);
       refetchCounts();
     },
     onError: (e: Error) => toast.error(e.message),
@@ -92,7 +100,7 @@ function DashboardPage() {
     <AppShell title="Dashboard" subtitle="Overview of your CJ → eBay pipeline">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {stats.map((s) => (
-          <Card key={s.label} className="shadow-[var(--shadow-card)]">
+          <Card key={s.label} className="shadow-[var(--shadow-card)]" aria-label={`${s.v} ${s.label} — ${s.hint}`}>
             <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0 p-3 sm:p-4">
               <CardTitle className="text-xs sm:text-sm font-medium text-muted-foreground">{s.label}</CardTitle>
               <s.Icon className="h-4 w-4 text-muted-foreground" />
@@ -107,9 +115,9 @@ function DashboardPage() {
 
       <div className="mt-8 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2 shadow-[var(--shadow-card)]">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
             <CardTitle>Activity</CardTitle>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <Select value={logCategory} onValueChange={setLogCategory}>
                 <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
                 <SelectContent><SelectItem value="all">All categories</SelectItem>{logCategories.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>

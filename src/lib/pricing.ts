@@ -42,11 +42,34 @@ export type PricedDraft = {
   quantity: number;
 };
 
+/**
+ * Defensive money parser: CJ (and other providers) return prices as
+ * numbers, numeric strings, strings with currency symbols/commas
+ * ("$2.76", "1,234.56"), or empty/missing values. Number() chokes on all
+ * but the first two and returns NaN — never let a NaN reach the UI.
+ * Returns 0 when no usable number is present.
+ */
+export function parseMoney(value: unknown): number {
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  if (value == null) return 0;
+  const cleaned = String(value).replace(/[^0-9.\-]/g, "");
+  if (!cleaned || cleaned === "-" || cleaned === ".") return 0;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Round a money value to exactly 2 decimals (kills float artifacts). */
+export function roundMoney(value: number): number {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
 /** Round up to the configured ladder (e.g. 0.99 -> $24.99 style). */
 export function roundToLadder(price: number, roundTo: number): number {
-  const r = Number(roundTo);
-  if (!r || r <= 0 || r >= 1) return Number(price.toFixed(2));
-  return Number((Math.floor(price) + r).toFixed(2));
+  // round_to comes from the DB as a float32 (0.9900000095367432) — snap it
+  // to 2 decimals first or the artifact leaks into the sell price.
+  const r = roundMoney(Number(roundTo));
+  if (!r || r <= 0 || r >= 1) return roundMoney(price);
+  return roundMoney(Math.floor(price) + r);
 }
 
 export function priceFromRules(
@@ -62,18 +85,18 @@ export function priceFromRules(
       Number(rules?.payment_fee_buffer_percent ?? PRICING_DEFAULTS.payment_fee_buffer_percent)) /
     100;
   const roundTo = Number(rules?.round_to ?? PRICING_DEFAULTS.round_to);
-  const landed = itemCost + shipping;
+  const landed = roundMoney(parseMoney(itemCost) + parseMoney(shipping));
   const profit = Math.max(landed * (markupPct / 100), minProfit);
   const preFeePrice = landed + profit;
   const ebayFee = preFeePrice * feeRate;
   const finalSell = roundToLadder(preFeePrice + ebayFee, roundTo);
   return {
     finalSell,
-    profit: Number(profit.toFixed(2)),
-    ebayFee: Number(ebayFee.toFixed(2)),
+    profit: roundMoney(profit),
+    ebayFee: roundMoney(ebayFee),
     feeRate,
-    landed: Number(landed.toFixed(2)),
-    preFeePrice: Number(preFeePrice.toFixed(2)),
+    landed,
+    preFeePrice: roundMoney(preFeePrice),
     quantity: Math.max(1, Math.floor(Number(rules?.max_listing_quantity ?? PRICING_DEFAULTS.max_listing_quantity))),
   };
 }

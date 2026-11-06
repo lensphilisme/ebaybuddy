@@ -20,15 +20,15 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
 const NAV = [
-  { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/products", label: "CJ Products", icon: PackageSearch },
-  { to: "/drafts", label: "Drafts", icon: FileEdit },
-  { to: "/listings", label: "Listings", icon: Tag },
-  { to: "/optimizer", label: "Optimizer", icon: LineChart },
-  { to: "/orders", label: "Orders", icon: ShoppingBag },
-  { to: "/marketing", label: "Marketing", icon: Megaphone },
-  { to: "/rules", label: "Rules", icon: Sliders },
-  { to: "/settings", label: "Settings", icon: Settings2 },
+  { to: "/dashboard", label: "Dashboard", short: "Home", icon: LayoutDashboard },
+  { to: "/products", label: "CJ Products", short: "Products", icon: PackageSearch },
+  { to: "/drafts", label: "Drafts", short: "Drafts", icon: FileEdit },
+  { to: "/listings", label: "Listings", short: "Listings", icon: Tag },
+  { to: "/optimizer", label: "Optimizer", short: "Optimizer", icon: LineChart },
+  { to: "/orders", label: "Orders", short: "Orders", icon: ShoppingBag },
+  { to: "/marketing", label: "Marketing", short: "Marketing", icon: Megaphone },
+  { to: "/rules", label: "Rules", short: "Rules", icon: Sliders },
+  { to: "/settings", label: "Settings", short: "Settings", icon: Settings2 },
 ] as const;
 
 function NavList({ pathname, onNavigate }: { pathname: string; onNavigate?: () => void }) {
@@ -113,14 +113,17 @@ export function AppShell({ children, title, subtitle, actions }: {
           {children}
         </main>
       </div>
-      <nav className="fixed inset-x-0 bottom-0 z-40 flex gap-1 overflow-x-auto border-t border-border bg-card/95 px-1 py-1.5 shadow-[var(--shadow-elevated)] backdrop-blur lg:hidden">
+      {/* Mobile bottom nav: 9 items share the width (flex-1, min-w-0) so the
+          nav never scrolls horizontally (bug 21). No overflow-x-auto, short
+          labels, icons stay visible on every screen width. */}
+      <nav className="fixed inset-x-0 bottom-0 z-40 flex gap-0.5 border-t border-border bg-card/95 px-1 py-1.5 shadow-[var(--shadow-elevated)] backdrop-blur lg:hidden">
         {NAV.map((item) => {
           const active = pathname.startsWith(item.to);
           const Icon = item.icon;
           return (
-            <Link key={item.to} to={item.to} className={cn("flex min-w-[68px] flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[10px] font-semibold transition", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}>
-              <Icon className="h-4 w-4" />
-              <span className="truncate">{item.label}</span>
+            <Link key={item.to} to={item.to} aria-label={item.label} className={cn("flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-md px-0.5 py-1.5 text-[9px] sm:text-[10px] font-semibold transition", active ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-secondary hover:text-foreground")}>
+              <Icon className="h-4 w-4 shrink-0" />
+              <span className="w-full truncate text-center">{item.short}</span>
             </Link>
           );
         })}

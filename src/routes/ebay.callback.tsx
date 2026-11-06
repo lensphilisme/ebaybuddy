@@ -1,6 +1,7 @@
 import { pageHead } from "@/lib/page-head";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { connectEbayWithCode } from "@/lib/ebay.functions";
 import { supabase } from "@/integrations/supabase/client";
@@ -27,6 +28,7 @@ function EbayCallback() {
   const { code, state, error, error_description } = Route.useSearch();
   const connect = useServerFn(connectEbayWithCode);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [status, setStatus] = useState<"idle" | "checking" | "saving" | "saved" | "manual" | "error">("idle");
   const [message, setMessage] = useState<string>("");
 
@@ -59,13 +61,16 @@ function EbayCallback() {
         setStatus("saving");
         await connect({ data: { code, state } });
         setStatus("saved");
+        // Invalidate the integration status (bug 14) so Settings shows the
+        // connected state the moment we land there — no stale "Needs OAuth".
+        await queryClient.invalidateQueries({ queryKey: ["integration-status"] });
         setTimeout(() => navigate({ to: "/settings" }), 1500);
       } catch (e) {
         setStatus("error");
         setMessage(e instanceof Error ? e.message : String(e));
       }
     })();
-  }, [code, state, error, error_description, connect, navigate]);
+  }, [code, state, error, error_description, connect, navigate, queryClient]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-background to-muted/30">

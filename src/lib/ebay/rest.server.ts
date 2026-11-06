@@ -12,7 +12,9 @@ export class EbayRestClient {
     const res = await ebayFetch(`https://api.ebay.com${path}`, { ...init, headers });
     if (!res.ok) {
       const json = await res.json().catch(() => ({}));
-      const detail = json.errors?.[0]?.message || "eBay request failed";
+      // longMessage carries the actionable detail ("Invalid value for SKU…");
+      // fall back to the short message, never a bare "eBay request failed".
+      const detail = json.errors?.[0]?.longMessage || json.errors?.[0]?.message || "eBay request failed";
       const message = res.status === 403 ? "Reconnect eBay in Settings to grant access, or check seller eligibility." : detail;
       throw classifyEbayError(res.status, message, res.headers.get("x-ebay-c-request-id") || undefined);
     }

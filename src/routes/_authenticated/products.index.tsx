@@ -5,7 +5,8 @@ import { useState, useMemo, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getCjCategories, getCjWarehouses, getCjProduct, getCjFreight, searchCjProducts } from "@/lib/cj.functions";
-import { priceFromRules, PRICING_DEFAULTS } from "@/lib/pricing";
+import { parseMoney, PRICING_DEFAULTS } from "@/lib/pricing";
+import { buildCjDraftRow } from "@/lib/draft-from-cj";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -137,69 +138,60 @@ function ProductsPage() {
       const { data: rule } = await supabase.from("automation_rules").select("markup_percent,min_profit_usd,ebay_fee_buffer_percent,payment_fee_buffer_percent,round_to,max_listing_quantity").maybeSingle();
       const rules = rule ?? PRICING_DEFAULTS;
       const rows = [];
+      const failed: string[] = [];
       for (const p of chosen) {
-        const itemCost = Number(p.sellPrice) || 0;
-        // Real shipping from a live CJ freight quote for the first variant
-        // (US destination). Falls back to a flagged 20% estimate only when
-        // the quote fails, so the price is never silently guessed.
-        let shipping = itemCost * 0.2;
-        let shippingNote = "Estimated; refine on product detail with live freight quote.";
-        let variantGroup: { variants: any[] } | null = null;
         try {
+          // Full CJ detail, exactly like the single-send path (bug 13) —
+          // the list row alone has no description, variants or brand, so
+          // bulk drafts built from it arrived empty.
           const detail: any = await productFn({ data: { pid: p.pid } });
           const variants = detail?.variants ?? detail?.variantList ?? detail?.productVariants ?? [];
-          if (Array.isArray(variants) && variants.length > 1) {
-            variantGroup = {
-              variants: variants.map((v: any, i: number) => ({
-                vid: v.vid,
-                variantSku: v.variantSku || v.vid,
-                variantKey: v.variantKey || v.variantNameEn || v.variantSku || v.vid,
-                variantNameEn: v.variantNameEn,
-                variantSellPrice: Number(v.variantSellPrice ?? p.sellPrice ?? 0),
-                inventory: Number(v.inventory || 1),
-              })),
-            };
-          }
-          const firstVid = variants[0]?.vid;
-          if (firstVid) {
-            const quote = await freightFn({ data: { endCountryCode: "US", products: [{ vid: firstVid, quantity: 1 }] } });
-            const cheapest = (quote || []).map((o: any) => Number(o.logisticPrice || 0)).filter((n: number) => n > 0).sort((a: number, b: number) => a - b)[0];
-            if (cheapest) { shipping = cheapest; shippingNote = "Live CJ freight quote (cheapest carrier, US)."; }
-          }
-        } catch { /* keep the flagged estimate */ }
-        const priced = priceFromRules(itemCost, shipping, rules);
-        rows.push({
-          user_id: auth.user!.id,
-          cj_product_id: p.pid,
-          sku: p.productSku || p.pid,
-          title: (p.productNameEn || "").slice(0, 80),
-          price: priced.finalSell,
-          quantity: priced.quantity,
-          images: [p.productImage].filter(Boolean),
-          status: "pending" as const,
-          profit: {
-            item_cost: itemCost,
-            shipping: Number(shipping.toFixed(2)),
-            shipping_estimate: Number(shipping.toFixed(2)),
-            markup_pct: Number(rules.markup_percent ?? PRICING_DEFAULTS.markup_percent),
-            min_profit_usd: Number(rules.min_profit_usd ?? PRICING_DEFAULTS.min_profit_usd),
-            ebay_fee_pct: priced.feeRate,
-            ebay_fee: priced.ebayFee,
-            profit: priced.profit,
-            variant_group: variantGroup,
-            note: shippingNote,
-          },
-        });
+          const firstVariant = variants[0] ?? null;
+          const itemCost = parseMoney(firstVariant?.variantSellPrice ?? detail?.sellPrice ?? p.sellPrice ?? 0);
+          // Real shipping from a live CJ freight quote for the first variant
+          // (US destination). Falls back to a flagged 20% estimate only when
+          // the quote fails, so the price is never silently guessed.
+          let shipping = itemCost * 0.2;
+          let shippingNote = "Estimated; refine on product detail with live freight quote.";
+          let carrier: { logisticName?: string; logisticAging?: string } | null = null;
+          try {
+            const firstVid = firstVariant?.vid;
+            if (firstVid) {
+              const quote = await freightFn({ data: { endCountryCode: "US", products: [{ vid: firstVid, quantity: 1 }] } });
+              const options = (quote || []).map((o: any) => ({ ...o, price: parseMoney(o.logisticPrice) })).filter((o: any) => o.price > 0).sort((a: any, b: any) => a.price - b.price);
+              if (options[0]) { shipping = options[0].price; carrier = options[0]; shippingNote = "Live CJ freight quote (cheapest carrier, US)."; }
+            }
+          } catch { /* keep the flagged estimate */ }
+          // One shared builder for single + bulk (bugs 2, 13): Brand,
+          // description, variants, variant prices and profit all come from
+          // the same place, so both paths store the same data.
+          rows.push(buildCjDraftRow({
+            userId: auth.user.id,
+            detail,
+            itemCost,
+            shipping,
+            shippingNote,
+            carrier,
+            rules,
+            endCountry: "US",
+            primaryVariant: firstVariant,
+          }));
+        } catch (e) {
+          failed.push(p.productNameEn || p.pid);
+        }
       }
-      const { data: inserted, error } = await supabase.from("listing_drafts").upsert(rows, {
+      if (rows.length === 0) throw new Error(`Could not load CJ details for: ${failed.join(", ")}`);
+      // No ignoreDuplicates: re-sending a product refreshes its draft with
+      // the full detail instead of silently keeping the old incomplete row.
+      const { error } = await supabase.from("listing_drafts").upsert(rows, {
         onConflict: "user_id,cj_product_id",
-        ignoreDuplicates: true,
       }).select("id");
       if (error) throw error;
-      return { added: inserted?.length ?? 0, skipped: rows.length - (inserted?.length ?? 0) };
+      return { added: rows.length, failed };
     },
-    onSuccess: ({ added, skipped }) => {
-      toast.success(added > 0 ? `Added ${added} product${added === 1 ? "" : "s"} to drafts${skipped > 0 ? ` (${skipped} already in drafts)` : ""}` : "All selected products were already in drafts");
+    onSuccess: ({ added, failed }) => {
+      if (failed.length > 0) toast.warning(`Saved ${added} product${added === 1 ? "" : "s"} to drafts. Failed to load: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? ` (+${failed.length - 3} more)` : ""}`);
+      else toast.success(`Saved ${added} product${added === 1 ? "" : "s"} to drafts`);
       setSelected({});
       navigate({ to: "/drafts" });
     },
@@ -209,13 +201,13 @@ function ProductsPage() {
   return (
     <AppShell title="CJ Products" subtitle="Search inventory and send winners to your draft queue">
       <form onSubmit={submit} className="flex flex-col md:flex-row gap-2 mb-4">
-        <div className="relative flex-1">
+        <div className="relative flex-1 min-w-0">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
-            placeholder="Search CJ Dropshipping (e.g. wireless earbuds, kitchen gadget…)"
-            className="pl-9"
+            placeholder="Search CJ products…"
+            className="pl-9 w-full"
           />
         </div>
         <Select value={countryCode} onValueChange={setCountryCode}>
@@ -258,7 +250,7 @@ function ProductsPage() {
         >
           <SelectTrigger className="w-32"><SelectValue /></SelectTrigger>
           <SelectContent>
-            {PAGE_SIZES.map((n) => <SelectItem key={n} value={String(n)}>{n} / page</SelectItem>)}
+            {PAGE_SIZES.map((n) => <SelectItem key={n} value={String(n)}>{`${n} / page`}</SelectItem>)}
           </SelectContent>
         </Select>
         <Button type="submit" disabled={isFetching}>
@@ -274,7 +266,7 @@ function ProductsPage() {
 
       {selectedIds.length > 0 && (
         <div className="sticky top-16 z-20 mb-4 flex items-center gap-3 bg-card border rounded-lg px-4 py-2 shadow-sm">
-          <span className="text-sm font-medium">{selectedIds.length} selected</span>
+          <span className="text-sm font-medium">{`${selectedIds.length} selected`}</span>
           <Button size="sm" variant="ghost" onClick={() => setSelected({})}>Clear</Button>
           <div className="flex-1" />
           <Button size="sm" onClick={() => bulkDraft.mutate()} disabled={bulkDraft.isPending}>
@@ -337,7 +329,9 @@ function ProductsPage() {
                       {p.categoryName && (
                          <Badge variant="secondary" className="min-w-0 flex-1 justify-start truncate text-[10px]" title={p.categoryName}>{p.categoryName}</Badge>
                       )}
-                       <span className="shrink-0 rounded-md bg-primary px-2 py-1 text-xs font-extrabold text-primary-foreground shadow-sm">${Number(p.sellPrice).toFixed(2)}</span>
+                       {parseMoney(p.sellPrice) > 0 && (
+                         <span className="shrink-0 rounded-md bg-primary px-2 py-1 text-xs font-extrabold text-primary-foreground shadow-sm">${parseMoney(p.sellPrice).toFixed(2)}</span>
+                       )}
                     </div>
                   </div>
                 </Card>
@@ -348,7 +342,7 @@ function ProductsPage() {
           {/* Pagination */}
           <div className="mt-6 flex items-center justify-between flex-wrap gap-3">
             <div className="text-xs text-muted-foreground">
-              Page {query.pageNum} of {totalPages} · {total.toLocaleString()} results
+              {`Page ${query.pageNum} of ${totalPages} · ${total.toLocaleString()} results`}
             </div>
             <div className="flex items-center gap-2">
               <Button

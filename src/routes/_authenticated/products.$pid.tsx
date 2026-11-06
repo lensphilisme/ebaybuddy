@@ -16,7 +16,8 @@ import { ArrowLeft, Loader2, Truck, FileEdit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import DOMPurify from "dompurify";
-import { priceFromRules, PRICING_DEFAULTS } from "@/lib/pricing";
+import { priceFromRules, parseMoney, roundMoney, PRICING_DEFAULTS } from "@/lib/pricing";
+import { buildCjDraftRow, cleanImageList, variantAxes, variantOptionMap } from "@/lib/draft-from-cj";
 
 export const Route = createFileRoute("/_authenticated/products/$pid")({ head: () => pageHead("CJ product details", "Inspect CJ variants, images and live freight pricing."),
   component: ProductDetailPage,
@@ -30,44 +31,6 @@ const COUNTRIES = [
   { code: "DE", name: "Germany" },
   { code: "FR", name: "France" },
 ];
-
-function variantAxes(productKey?: string, firstVariant?: any, productProps?: string[]) {
-  const keyAxes = String(productKey || "").split(/[-,/|>]+/).map((p) => p.trim()).filter(Boolean);
-  if (keyAxes.length) return keyAxes;
-  // CJ sometimes lists the option names as product properties instead of a
-  // "Color-Size" style key — use those before falling back to generic labels.
-  const propAxes = (productProps || []).map((p) => String(p || "").trim()).filter(Boolean);
-  if (propAxes.length) return propAxes;
-  const parts = String(firstVariant?.variantKey || firstVariant?.variantNameEn || "").split(/[-,/|]+/).filter(Boolean);
-  return parts.length > 1 ? parts.map((_, i) => `Option ${i + 1}`) : ["Option"];
-}
-
-function cleanImageList(...inputs: unknown[]) {
-  const urls: string[] = [];
-  const visit = (value: unknown) => {
-    if (!value) return;
-    if (Array.isArray(value)) return value.forEach(visit);
-    if (typeof value !== "string") return;
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      try { visit(JSON.parse(trimmed)); return; } catch { /* use as raw below */ }
-    }
-    try {
-      const u = new URL(trimmed.replace(/^['"]|['"]$/g, ""));
-      if (u.protocol === "https:" || u.protocol === "http:") urls.push(u.toString());
-    } catch { /* ignore */ }
-  };
-  inputs.forEach(visit);
-  return Array.from(new Set(urls));
-}
-
-function variantOptionMap(variant: any, axes: string[]) {
-  const label = String(variant?.variantKey || variant?.variantNameEn || variant?.variantSku || variant?.vid || "Option").trim();
-  const parts = label.split(/[-,/|]+/).map((p) => p.trim()).filter(Boolean);
-  const values = parts.length === axes.length ? parts : axes.length === 1 ? [label] : axes.map((_, i) => parts[i] || label);
-  return Object.fromEntries(axes.map((axis, i) => [axis, values[i] || label]));
-}
 
 function ProductDetailPage() {
   const { pid } = Route.useParams();
@@ -122,7 +85,7 @@ function ProductDetailPage() {
 
   const activeVid = variantId || variants[0]?.vid || "";
   const activeVariant = variants.find((v) => v.vid === activeVid);
-  const itemCost = Number(activeVariant?.variantSellPrice ?? p?.sellPrice ?? 0);
+  const itemCost = parseMoney(activeVariant?.variantSellPrice ?? p?.sellPrice ?? 0);
 
   const freight = useMutation({
     mutationFn: async () => {
@@ -135,7 +98,7 @@ function ProductDetailPage() {
   const [selectedCarrier, setSelectedCarrier] = useState<string>("");
   const [carrierResetNote, setCarrierResetNote] = useState<string>("");
   const carrier = freight.data?.find((o) => o.logisticName === selectedCarrier) ?? freight.data?.[0];
-  const shipping = carrier?.logisticPrice ?? 0;
+  const shipping = parseMoney(carrier?.logisticPrice ?? 0);
   // Never silently switch carriers: if the user's pick vanished from a
   // fresh quote, say so instead of quietly showing the cheapest.
   useEffect(() => {
@@ -155,61 +118,38 @@ function ProductDetailPage() {
   const preFeePrice = priced.preFeePrice;
   const ebayFee = priced.ebayFee;
   const finalSell = priced.finalSell;
-  const profit = desiredProfit;
+  // Reconciling figures (bug 9): the model profit is the TARGET, but the
+  // ladder-rounded sell price leaves a different ACTUAL profit. Show the
+  // actual one, and say plainly when the min-profit floor binds.
+  const markupProfit = roundMoney(landed * (markupPct / 100));
+  const minProfit = Number(rules?.min_profit_usd ?? PRICING_DEFAULTS.min_profit_usd);
+  const floorBinds = desiredProfit > markupProfit + 0.004;
+  const actualProfit = roundMoney(finalSell - landed - ebayFee);
+  const roundingGain = roundMoney(actualProfit - desiredProfit);
   const axes = useMemo(() => variantAxes(p?.productKeyEn, variants[0], p?.productProEnSet), [p?.productKeyEn, p?.productProEnSet, variants]);
   const selectedOptions = activeVariant ? variantOptionMap(activeVariant, axes) : {};
-  const priceForVariant = (rawCost: unknown) => {
-    const variantCost = Number(rawCost ?? itemCost) || itemCost;
-    return priceFromRules(variantCost, shipping, rules, markupPct).finalSell;
-  };
 
   const sendToDraft = useMutation({
     mutationFn: async () => {
       if (!p) throw new Error("Loading…");
       const { data: auth } = await supabase.auth.getUser();
       if (!auth.user) throw new Error("Not signed in");
-      const allVariantRows = variants.map((v) => ({
-        vid: v.vid,
-        variantSku: v.variantSku || v.vid,
-        variantKey: v.variantKey || v.variantNameEn || v.variantSku || v.vid,
-        variantNameEn: v.variantNameEn,
-        variantImage: cleanImageList(v.variantImage)[0] || images[0] || null,
-        variantSellPrice: Number(v.variantSellPrice ?? p.sellPrice ?? 0),
-        price: priceForVariant(v.variantSellPrice),
-        inventory: Number(v.inventory || 1),
-      }));
-      const { error } = await supabase.from("listing_drafts").upsert({
-        user_id: auth.user.id,
-        cj_product_id: p.pid,
-        cj_variant_id: activeVid || null,
-        sku: activeVariant?.variantSku || p.productSku || p.pid,
-        title: (p.productNameEn || "").slice(0, 80),
-        price: Number(finalSell.toFixed(2)),
-        images: cleanImageList(activeVariant?.variantImage, images).slice(0, 12),
-        description: p.description ?? "",
-        item_specifics: { Brand: "Unbranded", Condition: "New", ...selectedOptions },
-        status: "pending" as const,
-        profit: {
-          item_cost: itemCost,
-          shipping,
-          carrier: carrier?.logisticName ?? null,
-          carrier_days: carrier?.logisticAging ?? null,
-          ebay_fee_pct: priced.feeRate,
-          ebay_fee: Number(ebayFee.toFixed(2)),
-          desired_profit: Number(desiredProfit.toFixed(2)),
-          markup_pct: markupPct,
-          min_profit_usd: Number(rules?.min_profit_usd ?? PRICING_DEFAULTS.min_profit_usd),
-          profit: Number(profit.toFixed(2)),
-          end_country: country,
-          // Freight is quoted from the product's origin country when CJ
-          // reports it, otherwise CN (the quote default) — never a blind
-          // constant that contradicts the quote shown.
-          start_country: (p as any)?.countryCode || (p as any)?.countryFrom || (p as any)?.sourceFrom || "CN",
-          product_key: p.productKeyEn || null,
-          variant_axes: axes,
-          variant_group: allVariantRows.length > 1 ? { variants: allVariantRows } : null,
-        },
-      }, { onConflict: "user_id,cj_product_id" });
+      // One shared builder for single + bulk draft creation (bugs 2, 13):
+      // Brand, description, variants, variant prices and profit all come
+      // from the same place, so both paths store the same data.
+      const row = buildCjDraftRow({
+        userId: auth.user.id,
+        detail: p,
+        itemCost,
+        shipping,
+        shippingNote: freight.data?.length ? null : "No freight quote yet — price uses $0 shipping",
+        carrier,
+        rules: rules ?? null,
+        markupPct,
+        endCountry: country,
+        primaryVariant: activeVariant ?? null,
+      });
+      const { error } = await supabase.from("listing_drafts").upsert(row, { onConflict: "user_id,cj_product_id" });
       if (error) throw error;
     },
     onSuccess: () => {
@@ -264,7 +204,7 @@ function ProductDetailPage() {
                 <Badge variant="secondary">SKU: {p.productSku}</Badge>
                 {p.categoryName && <Badge variant="secondary">{p.categoryName}</Badge>}
                 {p.productWeight && <Badge variant="outline">{p.productWeight}g</Badge>}
-                <Badge variant="outline">{variants.length || 1} variant{variants.length === 1 ? "" : "s"}</Badge>
+                <Badge variant="outline">{`${variants.length || 1} variant${variants.length === 1 ? "" : "s"}`}</Badge>
               </div>
             </div>
 
@@ -276,7 +216,7 @@ function ProductDetailPage() {
                   <SelectContent>
                     {variants.map((v) => (
                       <SelectItem key={v.vid} value={v.vid}>
-                        {v.variantNameEn || v.variantKey || v.variantSku} · ${Number(v.variantSellPrice ?? 0).toFixed(2)}
+                        {v.variantNameEn || v.variantKey || v.variantSku} · ${parseMoney(v.variantSellPrice ?? 0).toFixed(2)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -314,7 +254,7 @@ function ProductDetailPage() {
                     <SelectContent>
                       {freight.data.map((o) => (
                         <SelectItem key={o.logisticName} value={o.logisticName}>
-                          {o.logisticName} · {o.logisticAging}d · ${Number(o.logisticPrice).toFixed(2)}
+                          {o.logisticName} · {o.logisticAging}d · ${parseMoney(o.logisticPrice).toFixed(2)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -326,7 +266,7 @@ function ProductDetailPage() {
             <Card className="p-4 space-y-3">
               <div className="text-sm font-medium">Pricing</div>
               <div>
-                <Label className="text-xs text-muted-foreground">Markup over landed cost: {markupPct}%{markupOverride === null ? " (from Rules)" : ""}</Label>
+                <Label className="text-xs text-muted-foreground">Markup over landed cost: {markupPct}% = ${markupProfit.toFixed(2)}{markupOverride === null ? " (from Rules)" : ""}</Label>
                 <Input type="range" min={10} max={300} step={5} value={markupPct} onChange={(e) => setMarkupOverride(Number(e.target.value))} />
               </div>
               <dl className="grid grid-cols-2 gap-y-1 text-sm">
@@ -334,10 +274,13 @@ function ProductDetailPage() {
                 <dt className="text-muted-foreground">+ Shipping ({carrier?.logisticName ?? "—"})</dt><dd className="text-right">${shipping.toFixed(2)}</dd>
                 {carrierResetNote && <dd className="col-span-2 text-xs text-amber-600">{carrierResetNote}</dd>}
                 <dt className="font-medium">Landed cost</dt><dd className="text-right font-medium">${landed.toFixed(2)}</dd>
-                  <dt className="text-muted-foreground">Profit before fee</dt><dd className="text-right">${desiredProfit.toFixed(2)}</dd>
-                  <dt className="text-muted-foreground">eBay + payment fees ({Math.round(priced.feeRate * 100)}% of ${preFeePrice.toFixed(2)})</dt><dd className="text-right">${ebayFee.toFixed(2)}</dd>
+                <dt className="text-muted-foreground">{markupPct}% markup on landed cost</dt><dd className="text-right">${markupProfit.toFixed(2)}</dd>
+                {floorBinds && <dd className="col-span-2 text-xs text-amber-600">Your ${minProfit.toFixed(2)} minimum profit applies instead — the {markupPct}% markup would only give ${markupProfit.toFixed(2)}.</dd>}
+                <dt className="text-muted-foreground">Profit before fee</dt><dd className="text-right">${desiredProfit.toFixed(2)}</dd>
+                <dt className="text-muted-foreground">eBay + payment fees ({Math.round(priced.feeRate * 100)}% of ${preFeePrice.toFixed(2)})</dt><dd className="text-right">${ebayFee.toFixed(2)}</dd>
                 <dt className="font-semibold">eBay sell price</dt><dd className="text-right font-semibold text-primary">${finalSell.toFixed(2)}</dd>
-                <dt className="font-semibold">Profit</dt><dd className={`text-right font-semibold ${profit >= 0 ? "text-success" : "text-destructive"}`}>${profit.toFixed(2)}</dd>
+                <dt className="font-semibold">Profit</dt><dd className={`text-right font-semibold ${actualProfit >= 0 ? "text-success" : "text-destructive"}`}>${actualProfit.toFixed(2)}</dd>
+                {roundingGain > 0.005 && <dd className="col-span-2 text-xs text-muted-foreground">Includes ${roundingGain.toFixed(2)} added by rounding the price up to ${finalSell.toFixed(2)} — sell price − landed cost − fees = ${actualProfit.toFixed(2)}.</dd>}
               </dl>
               <Button className="w-full" onClick={() => sendToDraft.mutate()} disabled={sendToDraft.isPending}>
                 <FileEdit className="h-4 w-4 mr-1" /> {sendToDraft.isPending ? "Saving…" : "Send to Drafts"}

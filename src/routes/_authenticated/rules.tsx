@@ -76,10 +76,16 @@ function RulesPage() {
 }
 
 function Field({ label, value, onSave, step = 1 }: { label: string; value: number; onSave: (v: number) => Promise<void> | void; step?: number }) {
-  const [local, setLocal] = useState(String(value));
+  // Money-style fields (step < 1, e.g. Round to .99) come back from the DB
+  // as float32 artifacts like 0.9900000095367432 — display and save them at
+  // 2 decimals so the artifact never leaks into the input (bug 11).
+  const formatValue = (v: number) => (step < 1 ? Number(v).toFixed(2) : String(v));
+  const normalize = (v: number) => (step < 1 ? Math.round(v * 100) / 100 : v);
+  const [local, setLocal] = useState(formatValue(value));
   const [saving, setSaving] = useState(false);
   // Keep the input in sync when the saved value changes elsewhere (e.g.
   // after a save + refetch) instead of showing a stale number.
-  useEffect(() => { setLocal(String(value)); }, [value]);
-  return <div className="space-y-1"><Label>{label}</Label><div className="flex gap-2"><Input type="number" step={step} value={local} onChange={(e) => setLocal(e.target.value)} /><Button variant="outline" disabled={saving || Number(local) === Number(value)} onClick={() => { setSaving(true); void Promise.resolve(onSave(Number(local))).finally(() => setSaving(false)); }}>{saving ? "Saving…" : "Save"}</Button></div></div>;
+  useEffect(() => { setLocal(formatValue(value)); }, [value]);
+  const unchanged = normalize(Number(local)) === normalize(Number(value));
+  return <div className="space-y-1"><Label>{label}</Label><div className="flex gap-2"><Input type="number" step={step} value={local} onChange={(e) => setLocal(e.target.value)} className="min-w-0 flex-1" /><Button variant="outline" disabled={saving || unchanged || !Number.isFinite(Number(local))} onClick={() => { setSaving(true); void Promise.resolve(onSave(normalize(Number(local)))).finally(() => setSaving(false)); }}>{saving ? "Saving…" : "Save"}</Button></div></div>;
 }

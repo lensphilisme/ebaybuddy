@@ -105,6 +105,8 @@ export type EbayActiveListing = {
 };
 
 /** Join a published Inventory offer to its inventory item (title/images live on the item, price/status on the offer). */
+import { sanitizeSku } from "./http";
+
 export function mapOfferToActiveListing(
   offer: OfferRecord,
   item?: InventoryRecord | null,
@@ -116,7 +118,7 @@ export function mapOfferToActiveListing(
     itemId: listingId,
     offerId: offer.offerId,
     title: item?.product?.title || offer.sku,
-    sku: offer.sku,
+    sku: sanitizeSku(offer.sku),
     price: Number(price?.value || 0),
     currency: price?.currency || "USD",
     quantity:

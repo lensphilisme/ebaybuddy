@@ -1,4 +1,4 @@
-import { ebayFetch as fetch } from "./http";
+import { ebayFetch as fetch, extractEbayErrorText, sanitizeSku } from "./http";
 const EBAY_API_BASE = "https://api.ebay.com";
 import { getItemAspectsForCategory } from "./taxonomy.server";
 async function findOfferBySku(accessToken: string, sku: string): Promise<{ offerId: string; listing?: { listingId?: string }; status?: string } | null> {
@@ -230,11 +230,48 @@ async function ensureInventoryLocation(accessToken: string, draft: any) {
     const text = await res.text();
     if (!/already|duplicate|exist/i.test(text)) throw new Error(`eBay inventory location failed: ${text}`);
   }
-  await fetch(`${EBAY_API_BASE}/sell/inventory/v1/location/${encodeURIComponent(loc.key)}/enable`, {
+  // The /enable call used to be fire-and-forget (.catch(() => undefined)).
+  // Offers against a non-enabled location fail with a confusing 400, so a
+  // failed enable must surface now instead of hiding until the offer call.
+  const enableRes = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/location/${encodeURIComponent(loc.key)}/enable`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Accept-Language": "en-US" },
-  }).catch(() => undefined);
+  });
+  if (!enableRes.ok && enableRes.status !== 409) {
+    const text = await enableRes.text();
+    if (!/already|duplicate|exist|enabled/i.test(text)) {
+      throw new Error(`eBay inventory location "${loc.key}" could not be enabled (${enableRes.status}): ${extractEbayErrorText(text) || text || "unknown error"}. Offers against a disabled location will fail — check the location in Seller Hub and retry.`);
+    }
+  }
   return loc.key;
+}
+
+/**
+ * Preflight: block the push with a clear, specific error listing exactly
+ * which required specifics are missing (Brand at minimum) instead of
+ * letting eBay reject it mid-publish. Checked against the FINAL aspects
+ * (after the category catalog filter), because the filter can strip a
+ * brand value the category does not accept.
+ */
+function missingRequiredSpecifics(draft: any, aspects: Record<string, string[]>, imageUrls: string[]): string[] {
+  const missing: string[] = [];
+  if (!safeTitle(draft.title, draft.sku)) missing.push("Title");
+  if (!(Number(draft.price) > 0)) missing.push("Price");
+  if (!draft.category_id) missing.push("Category");
+  if (!imageUrls.length) missing.push("Images (at least one valid http(s) image URL)");
+  const brand = aspects.Brand?.[0] || aspects.brand?.[0];
+  if (!brand) {
+    const draftBrand = cleanText(draft.brand || draft.item_specifics?.Brand);
+    missing.push(draftBrand ? `Brand (the category does not accept "${draftBrand}")` : "Brand");
+  }
+  return missing;
+}
+
+function throwIfMissingSpecifics(draft: any, aspects: Record<string, string[]>, imageUrls: string[]) {
+  const missing = missingRequiredSpecifics(draft, aspects, imageUrls);
+  if (missing.length) {
+    throw new Error(`Cannot publish "${safeTitle(draft.title, draft.sku)}": missing required eBay specifics: ${missing.join(", ")}. Fix the draft and try again.`);
+  }
 }
 
 function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }>, excludeNames: string[] = []) {
@@ -366,7 +403,10 @@ async function putInventoryItem(accessToken: string, sku: string, draft: any, im
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
     body: JSON.stringify(itemBody),
   });
-  if (!put.ok) throw new Error(`eBay inventory item failed: ${await put.text()}`);
+  if (!put.ok) {
+    const text = await put.text();
+    throw new Error(`eBay inventory item failed for SKU ${sku}: ${extractEbayErrorText(text) || text || `HTTP ${put.status}`}`);
+  }
 }
 
 async function createOrUpdateOffer(accessToken: string, offerBody: any) {
@@ -380,16 +420,22 @@ async function createOrUpdateOffer(accessToken: string, offerBody: any) {
   if (createRes.ok) {
     offerId = createJson.offerId;
   } else {
+    // Surface eBay's full error text (longMessage first) — the bare
+    // "eBay offer failed" hid the real cause in the Vercel logs.
+    const createError = createJson.errors?.[0]?.longMessage || createJson.errors?.[0]?.message || createJson.message || JSON.stringify(createJson);
     const existingId = await extractOfferIdFromError(createJson);
     const found = existingId ? { offerId: existingId } : await findOfferBySku(accessToken, offerBody.sku);
-    if (!found?.offerId) throw new Error(`eBay offer failed: ${createJson.errors?.[0]?.longMessage || createJson.errors?.[0]?.message || createJson.message || JSON.stringify(createJson)}`);
+    if (!found?.offerId) throw new Error(`eBay offer failed for SKU ${offerBody.sku}: ${createError}`);
     offerId = found.offerId;
     const updateRes = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${offerId}`, {
       method: "PUT",
       headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
       body: JSON.stringify(offerBody),
     });
-    if (!updateRes.ok) throw new Error(`eBay offer update failed: ${await updateRes.text()}`);
+    if (!updateRes.ok) {
+      const text = await updateRes.text();
+      throw new Error(`eBay offer update failed for SKU ${offerBody.sku} (offer ${offerId}): ${extractEbayErrorText(text) || text || `HTTP ${updateRes.status}`}. Original create error: ${createError}`);
+    }
   }
   return offerId!;
 }
@@ -408,13 +454,16 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   const baseImages = normalizeImageUrls(draft.images);
   const allImages = normalizeImageUrls(baseImages, variants.map((v) => v.variantImage || v.image));
   if (allImages.length === 0) throw new Error("eBay requires at least one valid http(s) image URL before publishing variants.");
+  // Preflight on the group-level aspects before any variant PUT happens.
+  const groupAspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog, axes);
+  throwIfMissingSpecifics(draft, groupAspects, allImages);
   const variantSKUs: string[] = [];
   const variantOfferIds: string[] = [];
   const specifications = axes.map((axis) => ({ name: axis, values: Array.from(new Set(optionsByVariant.map((options) => options[axis]).filter(Boolean))).slice(0, 60) }));
   const imageAxis = axes.find((a) => /color|colour|style|pattern/i.test(a)) || axes[0];
 
   for (const [index, variant] of variants.entries()) {
-    const sku = cleanText(variant.variantSku || variant.sku || variant.vid || `${draft.sku}-${variantSKUs.length + 1}`).replace(/\s+/g, "-").slice(0, 50);
+    const sku = sanitizeSku(variant.variantSku || variant.sku || variant.vid || `${draft.sku}-${variantSKUs.length + 1}`);
     variantSKUs.push(sku);
     const optionAspects = optionsByVariant[index];
     const imageUrls = normalizeImageUrls(variant.variantImage, variant.image, baseImages, allImages);
@@ -443,7 +492,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   const groupBody = {
     title: safeTitle(draft.title, draft.sku),
     description: safeDescription(draft),
-    aspects: filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog, axes),
+    aspects: groupAspects,
     imageUrls: allImages,
     variantSKUs,
     variesBy: { aspectsImageVariesBy: imageAxis ? [imageAxis] : undefined, specifications },
@@ -453,7 +502,10 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
     body: JSON.stringify(groupBody),
   });
-  if (!groupRes.ok) throw new Error(`eBay variation group failed: ${await groupRes.text()}`);
+  if (!groupRes.ok) {
+    const text = await groupRes.text();
+    throw new Error(`eBay variation group failed: ${extractEbayErrorText(text) || text || `HTTP ${groupRes.status}`}`);
+  }
 
   const publish = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/publish_by_inventory_item_group`, {
     method: "POST",
@@ -469,13 +521,15 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
   const policies = await fetchDefaultSellerPolicies(accessToken);
   const merchantLocationKey = await ensureInventoryLocation(accessToken, draft);
   const aspectCatalog = draft.category_id ? await getItemAspectsForCategory(accessToken, String(draft.category_id)) : {};
-  const sku = draft.sku || `cj-${draft.cj_product_id}`;
+  const sku = sanitizeSku(draft.sku || `cj-${draft.cj_product_id}`);
   const variants = variantRowsFromDraft(draft);
   if (variants.length > 1) return publishVariantGroup(accessToken, draft, policies, merchantLocationKey, variants, aspectCatalog);
 
   const imageUrls = normalizeImageUrls(draft.images);
-  if (imageUrls.length === 0) throw new Error("eBay requires at least one valid http(s) image URL before publishing.");
   const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft), aspectCatalog);
+  // Block the push here with a specific error instead of letting eBay
+  // reject it mid-publish (the Brand failure in the audit).
+  throwIfMissingSpecifics(draft, aspects, imageUrls);
   await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
 
   const offerBody: any = {
