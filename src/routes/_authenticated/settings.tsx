@@ -6,14 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { connectEbayWithCode, getEbayConnectUrl, listEbayNotificationTopics, listEbayNotificationSubscriptions, createEbayNotificationSubscription } from "@/lib/ebay.functions";
-import { saveCjApiKey, getIntegrationStatus } from "@/lib/cj.functions";
-import { saveAiProvider, removeAiProvider, getAiProviderStatus } from "@/lib/ai-provider.functions";
+import { connectEbayWithCode, getEbayConnectUrl, disconnectEbay, listEbayNotificationTopics, listEbayNotificationSubscriptions, createEbayNotificationSubscription } from "@/lib/ebay.functions";
+import { saveCjApiKey, getIntegrationStatus, disconnectCj } from "@/lib/cj.functions";
+import { saveAiProvider, removeAiProvider, getAiProviderStatus, testAiProvider } from "@/lib/ai-provider.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { KeyRound, Boxes, Tag, ExternalLink, Bell } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 
 export const Route = createFileRoute("/_authenticated/settings")({ head: () => pageHead("Integration settings", "Connect your CJ API key and eBay seller account."), component: SettingsPage });
 
@@ -25,13 +26,18 @@ function SettingsPage() {
   const [aiKey, setAiKey] = useState("");
   const [aiBaseUrl, setAiBaseUrl] = useState("");
   const [notifTopic, setNotifTopic] = useState("");
+  const [confirmDisconnect, setConfirmDisconnect] = useState<"cj" | "ebay" | null>(null);
+  const [aiKeyTest, setAiKeyTest] = useState<"ok" | "invalid" | null>(null);
   const urlFn = useServerFn(getEbayConnectUrl);
   const connectFn = useServerFn(connectEbayWithCode);
+  const disconnectEbayFn = useServerFn(disconnectEbay);
   const cjSaveFn = useServerFn(saveCjApiKey);
+  const disconnectCjFn = useServerFn(disconnectCj);
   const statusFn = useServerFn(getIntegrationStatus);
   const aiSaveFn = useServerFn(saveAiProvider);
   const aiRemoveFn = useServerFn(removeAiProvider);
   const aiStatusFn = useServerFn(getAiProviderStatus);
+  const aiTestFn = useServerFn(testAiProvider);
   const topicsFn = useServerFn(listEbayNotificationTopics);
   const subsFn = useServerFn(listEbayNotificationSubscriptions);
   const subscribeFn = useServerFn(createEbayNotificationSubscription);
@@ -79,6 +85,7 @@ function SettingsPage() {
     openai: { label: "OpenAI", defaultModel: "gpt-4o-mini", keyUrl: "https://platform.openai.com/api-keys", hint: "gpt-4o-mini is about $0.15 in / $0.60 out per 1M tokens." },
     custom: { label: "Custom (OpenAI-compatible)", defaultModel: "", keyUrl: "", hint: "Any endpoint that speaks the OpenAI chat-completions format." },
   };
+  const AI_LABELS: Record<string, string> = { deepseek: "DeepSeek", gemini: "Gemini", openai: "OpenAI", custom: "Custom" };
   const aiMeta = aiProviderMeta[aiProvider] || aiProviderMeta.deepseek;
 
   const openOAuth = useMutation({
@@ -103,7 +110,22 @@ function SettingsPage() {
   });
   const removeAi = useMutation({
     mutationFn: () => aiRemoveFn(),
-    onSuccess: () => { toast.success("AI provider removed — listing AI now uses local rules"); refetchAi(); },
+    onSuccess: () => { toast.success("AI provider removed — listing AI now uses local rules"); setAiKeyTest(null); refetchAi(); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const testAi = useMutation({
+    mutationFn: () => aiTestFn(),
+    onSuccess: (r: { provider: string; model: string }) => { setAiKeyTest("ok"); toast.success(`Key works — ${r.provider} (${r.model})`); refetchAi(); },
+    onError: (e: Error) => { setAiKeyTest("invalid"); toast.error(`Key invalid: ${e.message}`); },
+  });
+  const disconnectCjMut = useMutation({
+    mutationFn: () => disconnectCjFn(),
+    onSuccess: () => { toast.success("CJ disconnected — CJ calls stop; drafts and listings stay in the app"); setConfirmDisconnect(null); refetch(); },
+    onError: (e: Error) => toast.error(e.message),
+  });
+  const disconnectEbayMut = useMutation({
+    mutationFn: () => disconnectEbayFn(),
+    onSuccess: () => { toast.success("eBay disconnected — eBay calls stop; listings and drafts stay in the app"); setConfirmDisconnect(null); refetch(); },
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -122,11 +144,14 @@ function SettingsPage() {
               <Input type="password" autoComplete="off" aria-label="CJ API key" value={cjApiKey} onChange={(e) => setCjApiKey(e.target.value)} placeholder="CJ API key" className="min-w-0 flex-1" />
               <Button onClick={() => saveCj.mutate()} disabled={!cjApiKey.trim() || saveCj.isPending}>{saveCj.isPending ? "Verifying…" : "Connect"}</Button>
             </div>
+            {cjCred.is_active && (
+              <Button variant="outline" size="sm" onClick={() => setConfirmDisconnect("cj")}>Disconnect CJ</Button>
+            )}
             <p className="text-xs text-muted-foreground">
-               Get your API key at{" "}
+              Get your API key at{" "}
               <a className="text-primary underline inline-flex items-center gap-1" href="https://developers.cjdropshipping.com" target="_blank" rel="noreferrer">
                 developers.cjdropshipping.com <ExternalLink className="h-3 w-3" />
-               </a>{" "}— My CJ → Authorization → API. Do not paste an access token.
+              </a>{" "}— My CJ → Authorization → API. Do not paste an access token.
             </p>
           </div>
         </IntegrationCard>
@@ -139,9 +164,14 @@ function SettingsPage() {
           ready={ebayCred.is_active}
         >
           <div className="space-y-2">
-            <Button variant="outline" onClick={() => openOAuth.mutate()} disabled={openOAuth.isPending}>
-              Open eBay OAuth <ExternalLink className="h-3 w-3 ml-1" />
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => openOAuth.mutate()} disabled={openOAuth.isPending}>
+                {ebayCred.is_active ? "Reconnect eBay" : "Open eBay OAuth"} <ExternalLink className="h-3 w-3 ml-1" />
+              </Button>
+              {ebayCred.is_active && (
+                <Button variant="outline" size="sm" onClick={() => setConfirmDisconnect("ebay")}>Disconnect eBay</Button>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">
               eBay redirects back here and stores the seller token automatically for the signed-in app user.
             </p>
@@ -167,10 +197,17 @@ function SettingsPage() {
           icon={KeyRound}
           title="Listing AI (your own provider)"
           desc="Title rewrites, item-specifics, draft repair and category picks use your AI provider. Without one, the built-in local rules run instead — nothing breaks."
-          status={aiStatus?.connected ? `${aiStatus.provider} · ${aiStatus.model || ""}${aiStatus.keyLast4 ? ` · ••••${aiStatus.keyLast4}` : ""}${aiStatus.source === "env" ? " (workspace)" : ""}` : "Local only"}
+          status={aiStatus?.connected
+            ? [AI_LABELS[String(aiStatus.provider || "deepseek")] || "AI", aiStatus.model || "", aiStatus.keyLast4 ? `••••${aiStatus.keyLast4}` : "", aiStatus.source === "env" ? "(workspace)" : ""].filter(Boolean).join(" · ")
+            : aiStatus?.provider
+              ? `${AI_LABELS[String(aiStatus.provider)] || "AI"} · no key saved`
+              : "Local only"}
           ready={!!aiStatus?.connected}
         >
           <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              API key: <span className="font-medium text-foreground">{aiKeyTest === "invalid" ? "Key invalid" : aiStatus?.connected ? "Key saved · tested OK" : "No key saved"}</span>
+            </p>
             <div className="flex flex-col sm:flex-row gap-2">
               <Select value={aiProvider} onValueChange={(v) => { setAiProvider(v); setAiModel(""); }}>
                 <SelectTrigger aria-label="AI provider" className="w-full sm:w-56"><SelectValue /></SelectTrigger>
@@ -194,20 +231,23 @@ function SettingsPage() {
             <div className="flex flex-wrap gap-2">
               <Input type="password" autoComplete="off" aria-label="AI API key" value={aiKey} onChange={(e) => setAiKey(e.target.value)} placeholder={aiStatus?.connected ? "Paste a new key to replace the saved one" : "Paste your API key"} className="min-w-0 flex-1" />
               <Button onClick={() => saveAi.mutate()} disabled={!aiKey.trim() || saveAi.isPending}>{saveAi.isPending ? "Testing…" : aiStatus?.connected ? "Replace key" : "Connect"}</Button>
+              {aiStatus?.connected && (
+                <Button variant="outline" onClick={() => testAi.mutate()} disabled={testAi.isPending}>{testAi.isPending ? "Testing…" : "Test key"}</Button>
+              )}
               {aiStatus?.connected && aiStatus?.source === "user" && (
-                <Button variant="outline" onClick={() => removeAi.mutate()} disabled={removeAi.isPending}>Remove</Button>
+                <Button variant="outline" onClick={() => removeAi.mutate()} disabled={removeAi.isPending}>Remove key</Button>
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              {aiMeta.hint}{" "}
-              {aiMeta.keyUrl && (
+              {`${aiMeta.hint} `}
+              {aiMeta.keyUrl ? (
                 <>Get a key at{" "}
                   <a className="text-primary underline inline-flex items-center gap-1" href={aiMeta.keyUrl} target="_blank" rel="noreferrer">
                     {aiMeta.keyUrl.replace(/^https:\/\//, "")} <ExternalLink className="h-3 w-3" />
-                  </a>.{" "}
+                  </a>{". "}
                 </>
-              )}
-              Your key is tested live, saved server-side, and never shown again. Prices are approximate (Nov 2026) — check the provider's pricing page.
+              ) : null}
+              Your key is tested live, saved server-side, and never shown again. Prices change — check the provider's pricing page.
             </p>
           </div>
         </IntegrationCard>
@@ -263,6 +303,30 @@ function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Disconnect confirmations (audit #51): removing the saved key/token
+          stops that integration's calls. Drafts and listings stay in the
+          app; nothing is deleted or ended on eBay or CJ. */}
+      <AlertDialog open={confirmDisconnect !== null} onOpenChange={(open) => !open && setConfirmDisconnect(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmDisconnect === "cj" ? "Disconnect CJ Dropshipping?" : "Disconnect eBay?"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmDisconnect === "cj"
+                ? "Removes your saved CJ API key. CJ product search, quotes and stock checks stop working until you reconnect. Drafts and listings already in the app are kept."
+                : "Removes your saved eBay seller token. Sync, push, orders and marketing stop working until you reconnect. Listings already on eBay are NOT ended, and drafts in the app are kept."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep connected</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => { if (confirmDisconnect === "cj") disconnectCjMut.mutate(); else if (confirmDisconnect === "ebay") disconnectEbayMut.mutate(); }}
+            >
+              {confirmDisconnect === "cj" ? "Disconnect CJ" : "Disconnect eBay"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </AppShell>
   );
 }

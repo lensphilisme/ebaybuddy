@@ -28,6 +28,9 @@ export type Campaign = {
   campaignName: string;
   campaignStatus: string;
   marketplaceId: string;
+  /** ISO start date, returned by the API (used for the auto-pause age rule). */
+  startDate?: string;
+  endDate?: string;
   fundingStrategy?: { fundingModel: string; adRateStrategy?: string; bidPercentage?: string };
 };
 export type CampaignInput = {
@@ -141,15 +144,6 @@ export type AspectSpec = {
   cardinality?: string;
 };
 export type CategoryTreeNode = { categoryId: string; path: string; leaf: boolean };
-
-export type ConditionPolicy = {
-  categoryId: string;
-  itemConditions?: { conditionId: string; conditionDescription: string }[];
-};
-export type ReturnPolicy = {
-  categoryId: string;
-  returnPolicies?: { returnPolicyId?: string; name?: string; [key: string]: unknown }[];
-};
 
 export type ShippingFulfillmentInput = {
   lineItems: { lineItemId: string; quantity: number }[];

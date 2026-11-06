@@ -12,12 +12,13 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/empty-state";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Search, Loader2, ChevronLeft, ChevronRight, FileEdit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/products/")({ head: () => pageHead("CJ product research", "Search CJ products, categories and warehouse inventory."),
+export const Route = createFileRoute("/_authenticated/products/")({ head: () => pageHead("CJ Products", "Search CJ products, categories and warehouse inventory."),
   component: ProductsPage,
 });
 
@@ -25,19 +26,41 @@ const PAGE_SIZES = [10, 20, 40, 50, 100] as const;
 
 type SearchQuery = { keyword: string; pageNum: number; pageSize: number; categoryId?: string; countryCode?: string; minPrice?: number; maxPrice?: number };
 
+/** Product image with a loading skeleton (audit #15): no more blank grey
+ * boxes with no spinner while the image loads. */
+function ProductImage({ src, alt }: { src: string; alt: string }) {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <div className="relative h-full w-full">
+      {!loaded && <div className="absolute inset-0 animate-pulse bg-muted" aria-label="Loading image" />}
+      <img
+        src={src}
+        alt={alt}
+        loading="lazy"
+        onLoad={() => setLoaded(true)}
+        className={`h-full w-full object-cover transition-transform group-hover:scale-105 ${loaded ? "" : "opacity-0"}`}
+      />
+    </div>
+  );
+}
+
 function ProductsPage() {
   const initial = (() => {
     if (typeof window === "undefined") return null;
     try { return JSON.parse(sessionStorage.getItem("cj-products-search") || "null"); } catch { return null; }
   })();
-  const [keyword, setKeyword] = useState<string>(initial?.keyword ?? "");
+  // Default browse view (audit #11): on first load with no saved search,
+  // run a "home" search instead of an empty prompt.
+  const [keyword, setKeyword] = useState<string>(initial?.keyword ?? "home");
   const [query, setQuery] = useState<SearchQuery>(
-    initial?.query ?? { keyword: "", pageNum: 1, pageSize: 20 },
+    initial?.query ?? { keyword: "home", pageNum: 1, pageSize: 20 },
   );
   const [categoryId, setCategoryId] = useState<string>(initial?.categoryId ?? "all");
   const [countryCode, setCountryCode] = useState<string>(initial?.countryCode ?? "all");
   const [minPrice, setMinPrice] = useState<string>(initial?.minPrice ?? "");
   const [maxPrice, setMaxPrice] = useState<string>(initial?.maxPrice ?? "");
+  const [warehouseFilter, setWarehouseFilter] = useState("");
+  const [filtersApplying, setFiltersApplying] = useState(false);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
 
@@ -68,15 +91,33 @@ function ProductsPage() {
   const flatCategories = useMemo(() => categoryGroups.flatMap((g: any) =>
     g.seconds.flatMap((s: any) => s.thirds.map((t: any) => ({ id: t.id, name: `${g.name} / ${s.name} / ${t.name}` }))),
   ), [categoryGroups]);
-  const warehouseOptions = useMemo(() => {
+/** Warehouse labels come from CJ in raw form ("North China storage
+ * library") — normalize them to plain English warehouse names. */
+function normalizeWarehouseLabel(label: string, code: string): string {
+  let l = String(label || "")
+    .replace(/storage library/gi, "warehouse")
+    .replace(/\bstock\b/gi, "warehouse")
+    .replace(/\s+/g, " ")
+    .trim();
+  l = l.replace(/warehouse warehouse/gi, "warehouse");
+  if (!l) return `${code} warehouse`;
+  return l.toLowerCase().startsWith(code.toLowerCase()) ? l : `${code} ${l}`;
+}
+
+const warehouseOptions = useMemo(() => {
     const seen = new Map<string, string>();
     for (const w of warehouses ?? []) {
       const code = String(w.countryCode || "").toUpperCase();
       if (!code || w.disabled) continue;
-      if (!seen.has(code)) seen.set(code, w.areaEn || w.nameEn || code);
+      if (!seen.has(code)) seen.set(code, normalizeWarehouseLabel(w.areaEn || w.nameEn || code, code));
     }
     return Array.from(seen.entries()).map(([code, label]) => ({ code, label }));
   }, [warehouses]);
+  const filteredWarehouses = useMemo(() => {
+    const q = warehouseFilter.trim().toLowerCase();
+    if (!q) return warehouseOptions;
+    return warehouseOptions.filter((w) => `${w.code} ${w.label}`.toLowerCase().includes(q));
+  }, [warehouseOptions, warehouseFilter]);
   const hasCriteria = query.keyword.length > 0 || !!query.categoryId || !!query.countryCode || query.minPrice != null || query.maxPrice != null;
   const { data, isFetching, error } = useQuery({
     queryKey: ["cj-search", query],
@@ -87,6 +128,18 @@ function ProductsPage() {
 
   const items = data?.list ?? [];
   const total = data?.total ?? 0;
+  // Hide results whose image/title clearly mismatches (audit #18): a card
+  // with no image AND no price is skipped. When a price filter is set,
+  // items with no price are excluded — they cannot be verified against it.
+  const visibleItems = useMemo(() => {
+    const priceFilterSet = query.minPrice != null || query.maxPrice != null;
+    return items.filter((p) => {
+      const price = parseMoney(p.sellPrice);
+      if (!p.productImage && !(price > 0)) return false;
+      if (priceFilterSet && !(price > 0)) return false;
+      return true;
+    });
+  }, [items, query.minPrice, query.maxPrice]);
   const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
 
@@ -95,6 +148,30 @@ function ProductsPage() {
     if (typeof window === "undefined") return;
     try { sessionStorage.setItem("cj-products-search", JSON.stringify({ keyword, query, categoryId, countryCode, minPrice, maxPrice })); } catch { /* ignore */ }
   }, [keyword, query, categoryId, countryCode, minPrice, maxPrice]);
+
+  // Filters auto-apply (audit #16): changing warehouse/price/category
+  // re-runs the search automatically (debounced 500ms) — no silent
+  // "change the dropdown but results don't change until Search".
+  const filtersDirty = keyword !== query.keyword || categoryId !== (query.categoryId ?? "all") || countryCode !== (query.countryCode ?? "all") || minPrice !== (query.minPrice != null ? String(query.minPrice) : "") || maxPrice !== (query.maxPrice != null ? String(query.maxPrice) : "");
+  useEffect(() => {
+    if (!filtersDirty) return;
+    setFiltersApplying(true);
+    const t = setTimeout(() => {
+      const min = minPrice.trim() === "" ? undefined : Number(minPrice);
+      const max = maxPrice.trim() === "" ? undefined : Number(maxPrice);
+      setQuery((q) => ({
+        ...q,
+        keyword,
+        categoryId: categoryId === "all" ? undefined : categoryId,
+        countryCode: countryCode === "all" ? undefined : countryCode,
+        minPrice: Number.isFinite(min) ? min : undefined,
+        maxPrice: Number.isFinite(max) ? max : undefined,
+        pageNum: 1,
+      }));
+      setFiltersApplying(false);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [keyword, categoryId, countryCode, minPrice, maxPrice]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Which visible products are already listed or in draft?
   const pids = items.map((p) => p.pid);
@@ -213,11 +290,21 @@ function ProductsPage() {
         <Select value={countryCode} onValueChange={setCountryCode}>
           <SelectTrigger className="md:w-40"><SelectValue /></SelectTrigger>
           <SelectContent>
+            <div className="p-2">
+              <Input
+                value={warehouseFilter}
+                onChange={(e) => setWarehouseFilter(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+                placeholder="Search warehouses…"
+                className="h-8"
+                aria-label="Search warehouses"
+              />
+            </div>
             <SelectItem value="all">Any warehouse</SelectItem>
-            {warehouseOptions.map((w) => <SelectItem key={w.code} value={w.code}>{w.code} stock · {w.label}</SelectItem>)}
+            {filteredWarehouses.map((w) => <SelectItem key={w.code} value={w.code}>{w.label}</SelectItem>)}
             {warehouseOptions.length === 0 && (<>
-              <SelectItem value="CN">CN stock</SelectItem>
-              <SelectItem value="US">US stock</SelectItem>
+              <SelectItem value="CN">CN warehouse</SelectItem>
+              <SelectItem value="US">US warehouse</SelectItem>
             </>)}
           </SelectContent>
         </Select>
@@ -282,16 +369,22 @@ function ProductsPage() {
             <Card key={i} className="aspect-[3/4] animate-pulse bg-muted/40" />
           ))}
         </div>
-      ) : items.length === 0 ? (
-        <Card className="p-12 text-center text-sm text-muted-foreground">
-          {hasCriteria ? "No products matched your search." : "Enter a search term, choose a CJ category, a warehouse, or a price range to browse inventory."}
-        </Card>
+      ) : visibleItems.length === 0 ? (
+        <EmptyState
+          icon={Search}
+          title={hasCriteria ? "No products matched your search." : "Browse CJ inventory"}
+          help={hasCriteria ? "Try a different keyword, category, warehouse or price range." : "Enter a search term, choose a CJ category, a warehouse, or a price range to browse inventory."}
+        />
       ) : (
         <>
+          {query.keyword === "home" && !query.categoryId && !query.countryCode && query.minPrice == null && query.maxPrice == null && (
+            <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Popular right now</h2>
+          )}
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-4">
-            {items.map((p) => {
+            {visibleItems.map((p) => {
               const checked = !!selected[p.pid];
               const status = (statusMap as any)[p.pid];
+              const price = parseMoney(p.sellPrice);
               return (
                 <Card key={p.pid} className={`group relative overflow-hidden border-0 bg-[var(--gradient-hero)] shadow-[var(--shadow-card)] transition hover:-translate-y-0.5 hover:shadow-[var(--shadow-elevated)] ${checked ? "ring-2 ring-primary" : ""}`}>
                   <div className="absolute top-2 left-2 z-10">
@@ -311,13 +404,10 @@ function ProductsPage() {
                   )}
                   <Link to="/products/$pid" params={{ pid: p.pid }} className="block w-full text-left" aria-label={`Open ${p.productNameEn}`}>
                     <div className="aspect-square bg-muted overflow-hidden">
-                      {p.productImage && (
-                        <img
-                          src={p.productImage}
-                          alt={p.productNameEn}
-                          loading="lazy"
-                          className="h-full w-full object-cover group-hover:scale-105 transition-transform"
-                        />
+                      {p.productImage ? (
+                        <ProductImage src={p.productImage} alt={p.productNameEn} />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-xs text-muted-foreground">No image</div>
                       )}
                     </div>
                   </Link>
@@ -325,12 +415,17 @@ function ProductsPage() {
                      <Link to="/products/$pid" params={{ pid: p.pid }} title={p.productNameEn} className="block min-h-[2.5rem] text-sm font-extrabold font-display leading-snug hover:underline line-clamp-2">
                        {p.productNameEn}
                     </Link>
+                     <div className="mt-1 text-[11px] text-muted-foreground truncate" title={`${p.productSku || ""}${p.supplierName ? ` · ${p.supplierName}` : ""}`}>
+                       {p.productSku ? `SKU ${p.productSku}` : ""}{p.productSku && p.supplierName ? " · " : ""}{p.supplierName || ""}
+                     </div>
                      <div className="mt-2 flex items-start justify-between gap-2">
                       {p.categoryName && (
                          <Badge variant="secondary" className="min-w-0 flex-1 justify-start truncate text-[10px]" title={p.categoryName}>{p.categoryName}</Badge>
                       )}
-                       {parseMoney(p.sellPrice) > 0 && (
-                         <span className="shrink-0 rounded-md bg-primary px-2 py-1 text-xs font-extrabold text-primary-foreground shadow-sm">${parseMoney(p.sellPrice).toFixed(2)}</span>
+                       {price > 0 ? (
+                         <span className="shrink-0 rounded-md bg-primary px-2 py-1 text-xs font-extrabold text-primary-foreground shadow-sm">${price.toFixed(2)}</span>
+                       ) : (
+                         <span className="shrink-0 rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">Price on detail</span>
                        )}
                     </div>
                   </div>
@@ -342,7 +437,8 @@ function ProductsPage() {
           {/* Pagination */}
           <div className="mt-6 flex items-center justify-between flex-wrap gap-3">
             <div className="text-xs text-muted-foreground">
-              {`Page ${query.pageNum} of ${totalPages} · ${total.toLocaleString()} results`}
+              {`Page ${query.pageNum} of ${totalPages} · ${total >= 6000 ? "6,000+ results (CJ caps at 6,000)" : `${total.toLocaleString()} results`}`}
+              {filtersApplying ? " · Applying filters…" : filtersDirty ? "" : hasCriteria ? " · Filters applied" : ""}
             </div>
             <div className="flex items-center gap-2">
               <Button

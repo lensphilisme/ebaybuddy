@@ -10,6 +10,12 @@ export function campaignPayload(input: CampaignInput) {
 export class EbayMarketingService {
   constructor(private client: EbayRestClient) {}
   campaigns(offset = 0) { return this.client.json<Page<{ campaigns: Campaign[] }>>(`/sell/marketing/v1/ad_campaign?limit=50&offset=${offset}`); }
+  /** Ads in a campaign (each carries a listingId) — used to count the
+   * listings a campaign promotes and to attribute views/sales to it for
+   * the optimizer's auto-pause rule. */
+  ads(campaignId: string) {
+    return this.client.json<{ ads?: { adId?: string; listingId?: string }[]; total?: number }>(`/sell/marketing/v1/ad_campaign/${encodeURIComponent(campaignId)}/ad?limit=500&offset=0`);
+  }
   async create(input: CampaignInput) {
     const response = await this.client.response("/sell/marketing/v1/ad_campaign", { method: "POST", body: JSON.stringify(campaignPayload(input)) });
     const id = response.headers.get("location")?.split("/").pop();

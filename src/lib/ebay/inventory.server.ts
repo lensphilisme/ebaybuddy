@@ -252,8 +252,38 @@ async function ensureInventoryLocation(accessToken: string, draft: any) {
  * letting eBay reject it mid-publish. Checked against the FINAL aspects
  * (after the category catalog filter), because the filter can strip a
  * brand value the category does not accept.
+ *
+ * Also blocks a push whose draft has no shipping quote (audit #23): the
+ * price was built on $0 freight, so the listing would be underpriced by
+ * the real shipping cost. The bulk-send path may create drafts without a
+ * quote, but the push is the enforcement point.
  */
-function missingRequiredSpecifics(draft: any, aspects: Record<string, string[]>, imageUrls: string[]): string[] {
+const PLACEHOLDER_BRANDS = new Set(["unbranded", "does not apply"]);
+
+/**
+ * Pure seam for the Brand catalog check (audit #57): when the category
+ * catalog restricts Brand to an allowed list and the brand is a
+ * placeholder ("Unbranded" / "Does Not Apply") that is not among the
+ * allowed values, eBay rejects the push — block it here with a specific
+ * error naming the category and the brand problem. Returns the error
+ * message, or null when the brand passes. A catalog with no allowed
+ * list lets "Unbranded" through as before.
+ */
+export function brandBlockedByCatalog(
+  brand: unknown,
+  catalog: Record<string, { required?: boolean; allowed?: string[]; maxLen?: number }> | null | undefined,
+  categoryId?: string | null,
+): string | null {
+  const entry = Object.entries(catalog || {}).find(([name]) => name.toLowerCase() === "brand");
+  const allowed = entry?.[1]?.allowed;
+  if (!allowed?.length) return null;
+  const b = String(brand || "").trim();
+  if (!PLACEHOLDER_BRANDS.has(b.toLowerCase())) return null;
+  if (allowed.some((v) => String(v).toLowerCase() === b.toLowerCase())) return null;
+  return `Brand "${b || "missing"}" is not accepted for eBay category ${categoryId || "this category"} — the category only allows ${allowed.slice(0, 5).join(", ")}${allowed.length > 5 ? ", …" : ""}. Set a real brand (or pick a category that accepts "${b}") and retry.`;
+}
+
+function missingRequiredSpecifics(draft: any, aspects: Record<string, string[]>, imageUrls: string[], catalog?: Record<string, { required?: boolean; allowed?: string[]; maxLen?: number }>): string[] {
   const missing: string[] = [];
   if (!safeTitle(draft.title, draft.sku)) missing.push("Title");
   if (!(Number(draft.price) > 0)) missing.push("Price");
@@ -264,14 +294,26 @@ function missingRequiredSpecifics(draft: any, aspects: Record<string, string[]>,
     const draftBrand = cleanText(draft.brand || draft.item_specifics?.Brand);
     missing.push(draftBrand ? `Brand (the category does not accept "${draftBrand}")` : "Brand");
   }
+  // Shipping quote (audit #23): a $0/missing shipping means the price was
+  // built on free freight — block the push, don't underprice the listing.
+  const shipping = Number((draft.profit as any)?.shipping || 0);
+  if (!(shipping > 0)) missing.push("Shipping quote (get a shipping quote first — the price needs real freight)");
   return missing;
 }
 
-function throwIfMissingSpecifics(draft: any, aspects: Record<string, string[]>, imageUrls: string[]) {
-  const missing = missingRequiredSpecifics(draft, aspects, imageUrls);
+function throwIfMissingSpecifics(draft: any, aspects: Record<string, string[]>, imageUrls: string[], catalog?: Record<string, { required?: boolean; allowed?: string[]; maxLen?: number }>) {
+  const missing = missingRequiredSpecifics(draft, aspects, imageUrls, catalog);
   if (missing.length) {
     throw new Error(`Cannot publish "${safeTitle(draft.title, draft.sku)}": missing required eBay specifics: ${missing.join(", ")}. Fix the draft and try again.`);
   }
+  // Brand catalog check (audit #57): a placeholder brand the category
+  // does not allow must fail here with a specific error, not at eBay.
+  // Check the final aspect first; if the filter stripped it, check the
+  // draft's own brand so the error names the real problem.
+  const brandError =
+    brandBlockedByCatalog(aspects.Brand?.[0] || aspects.brand?.[0], catalog, draft.category_id) ||
+    brandBlockedByCatalog(draft.brand || draft.item_specifics?.Brand, catalog, draft.category_id);
+  if (brandError) throw new Error(`Cannot publish "${safeTitle(draft.title, draft.sku)}": ${brandError}`);
 }
 
 function filterAspectsByCategory(aspects: Record<string, string[]>, catalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }>, excludeNames: string[] = []) {
@@ -447,7 +489,82 @@ export function variantGroupKeyFor(sku: string | undefined, cjProductId: string 
   return `${sku || cjProductId}-grp`.replace(/[^A-Za-z0-9_-]/g, "-").slice(0, 50);
 }
 
-async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[], aspectCatalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>) {
+export type BestOfferRule = { best_offer_enabled?: boolean | null; best_offer_min_percent?: number | null };
+
+/**
+ * Best Offer fields for a new offer (sales feature #2). Pure seam, built
+ * from the automation_rules row and the sell price:
+ * - OFF (or no usable price) -> {} so the offer body omits Best Offer.
+ * - ON -> bestOfferEnabled with auto-decline at sell x min% (offers below
+ *   that are refused automatically) and auto-accept at the full sell
+ *   price; offers in between wait for the seller to accept or decline.
+ * Only NEW pushes get these fields; existing listings are never touched.
+ */
+export function bestOfferFields(rule: BestOfferRule | null | undefined, sellPrice: number): Record<string, unknown> {
+  const enabled = rule?.best_offer_enabled ?? true;
+  if (!enabled) return {};
+  const price = Number(sellPrice) || 0;
+  if (!(price > 0)) return {};
+  const minPct = Math.max(1, Math.min(100, Number(rule?.best_offer_min_percent ?? 80)));
+  return {
+    bestOfferEnabled: true,
+    bestOfferTerms: {
+      autoAcceptPrice: { value: price.toFixed(2), currency: "USD" },
+      autoDeclinePrice: { value: (price * minPct / 100).toFixed(2), currency: "USD" },
+    },
+  };
+}
+
+/** Writable offer fields for a price revise (PUT replaces the offer). */
+const OFFER_PUT_FIELDS = [
+  "sku", "marketplaceId", "format", "availableQuantity", "categoryId",
+  "merchantLocationKey", "listingDescription", "listingPolicies",
+  "pricingSummary", "bestOfferEnabled", "bestOfferTerms", "charity",
+  "hideFromSearch", "includeCatalogProductDetails", "listingDuration",
+  "listingStartDate", "lotSize", "secondaryCategoryId", "storeCategoryNames",
+  "tax", "extendedProducerResponsibility",
+] as const;
+
+/**
+ * Price-drop revise (sales feature #5): fetch the existing offer, PUT it
+ * back with only the price changed (writable fields only, so a revise
+ * never drops Best Offer or policies the offer already carries). Same
+ * GET-then-PUT pattern as reviseEbayListingText for inventory items.
+ */
+export async function reviseOfferPrice(accessToken: string, offerId: string, newPrice: number): Promise<{ offerId: string; price: number }> {
+  const price = Number(newPrice);
+  if (!(price > 0)) throw new Error("A revised price must be greater than 0.");
+  const getRes = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`, {
+    headers: { Authorization: `Bearer ${accessToken}`, "Accept-Language": "en-US" },
+  });
+  if (!getRes.ok) {
+    const text = await getRes.text();
+    throw new Error(`eBay offer lookup failed for price revise (${offerId}): ${extractEbayErrorText(text) || text || `HTTP ${getRes.status}`}`);
+  }
+  const existing: any = await getRes.json().catch(() => ({}));
+  const body: Record<string, unknown> = {};
+  for (const f of OFFER_PUT_FIELDS) if (existing[f] !== undefined) body[f] = existing[f];
+  body.pricingSummary = {
+    ...(existing.pricingSummary || {}),
+    price: { value: price.toFixed(2), currency: existing.pricingSummary?.price?.currency || "USD" },
+  };
+  const put = await fetch(`${EBAY_API_BASE}/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", "Content-Language": "en-US", "Accept-Language": "en-US" },
+    body: JSON.stringify(body),
+  });
+  if (!put.ok) {
+    const text = await put.text();
+    throw new Error(`eBay offer price revise failed for offer ${offerId}: ${extractEbayErrorText(text) || text || `HTTP ${put.status}`}`);
+  }
+  return { offerId, price: roundMoney(price) };
+}
+
+function roundMoney(value: number): number {
+  return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+async function publishVariantGroup(accessToken: string, draft: any, policies: any, merchantLocationKey: string, variants: DraftVariant[], aspectCatalog: Record<string, { required: boolean; allowed?: string[]; maxLen?: number }>, bestOffer?: BestOfferRule) {
   const axes = safeVariationAxes(draft, variants[0], aspectCatalog);
   const optionsByVariant = uniqueVariationOptions(variants, axes);
   const groupKey = variantGroupKeyFor(draft.sku, draft.cj_product_id);
@@ -456,7 +573,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   if (allImages.length === 0) throw new Error("eBay requires at least one valid http(s) image URL before publishing variants.");
   // Preflight on the group-level aspects before any variant PUT happens.
   const groupAspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft, {}, axes), aspectCatalog, axes);
-  throwIfMissingSpecifics(draft, groupAspects, allImages);
+  throwIfMissingSpecifics(draft, groupAspects, allImages, aspectCatalog);
   const variantSKUs: string[] = [];
   const variantOfferIds: string[] = [];
   const specifications = axes.map((axis) => ({ name: axis, values: Array.from(new Set(optionsByVariant.map((options) => options[axis]).filter(Boolean))).slice(0, 60) }));
@@ -482,6 +599,7 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
       listingDescription: safeDescription(draft),
       listingPolicies: policies,
       pricingSummary: { price: { value: String(Number(variantPrice || draft.price || 0).toFixed(2)), currency: "USD" } },
+      ...bestOfferFields(bestOffer, variantPrice),
     }));
     // Keep every variant offer ID: the listing is one eBay item, but the
     // Inventory API manages it as one offer per variant SKU. The first one
@@ -517,19 +635,19 @@ async function publishVariantGroup(accessToken: string, draft: any, policies: an
   return { offerId: variantOfferIds[0] || null, offerIds: variantOfferIds, listingId: publishJson.listingId, inventoryItemGroupKey: groupKey };
 }
 
-export async function publishInventoryItem(accessToken: string, draft: any) {
+export async function publishInventoryItem(accessToken: string, draft: any, opts?: { bestOffer?: BestOfferRule }) {
   const policies = await fetchDefaultSellerPolicies(accessToken);
   const merchantLocationKey = await ensureInventoryLocation(accessToken, draft);
   const aspectCatalog = draft.category_id ? await getItemAspectsForCategory(accessToken, String(draft.category_id)) : {};
   const sku = sanitizeSku(draft.sku || `cj-${draft.cj_product_id}`);
   const variants = variantRowsFromDraft(draft);
-  if (variants.length > 1) return publishVariantGroup(accessToken, draft, policies, merchantLocationKey, variants, aspectCatalog);
+  if (variants.length > 1) return publishVariantGroup(accessToken, draft, policies, merchantLocationKey, variants, aspectCatalog, opts?.bestOffer);
 
   const imageUrls = normalizeImageUrls(draft.images);
   const aspects = filterAspectsByCategory(normalizeAspects(draft.item_specifics, draft), aspectCatalog);
   // Block the push here with a specific error instead of letting eBay
   // reject it mid-publish (the Brand failure in the audit).
-  throwIfMissingSpecifics(draft, aspects, imageUrls);
+  throwIfMissingSpecifics(draft, aspects, imageUrls, aspectCatalog);
   await putInventoryItem(accessToken, sku, draft, imageUrls, aspects);
 
   const offerBody: any = {
@@ -542,6 +660,8 @@ export async function publishInventoryItem(accessToken: string, draft: any) {
     listingDescription: safeDescription(draft),
     listingPolicies: policies,
     pricingSummary: { price: { value: String(Number(draft.price || 0).toFixed(2)), currency: "USD" } },
+    // Best Offer (sales feature #2): only new pushes, never existing listings.
+    ...bestOfferFields(opts?.bestOffer, Number(draft.price || 0)),
   };
 
   const offerId = await createOrUpdateOffer(accessToken, offerBody);

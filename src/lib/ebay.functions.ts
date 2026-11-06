@@ -1,11 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { ebayConsentUrl, exchangeEbayCode, fetchPublishedOffersPage, fetchPublishedOffersViaInventory, getCategorySuggestions, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayListingRow } from "./ebay.server";
+import { ebayConsentUrl, exchangeEbayCode, fetchPublishedOffersPage, fetchPublishedOffersViaInventory, fetchEndedOffersViaInventory, getCategorySuggestions, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, reviseOfferPrice, endEbayListingRow } from "./ebay.server";
 import { EbayRestClient } from "./ebay/rest.server";
 import { EbayOrderService, EbayReturnService } from "./ebay/orders.server";
 import { EbayNotificationService } from "./ebay/notifications.server";
 import { EbayMarketingService, campaignInput } from "./ebay/marketing.server";
-import { requireLiveOptimizer, requireListingIdentity, hasFreshTraffic } from "./ebay/optimizer-policy";
+import { requireLiveOptimizer, requireListingIdentity, hasFreshTraffic, priceDropFor, cjStockIsZero } from "./ebay/optimizer-policy";
 import { callAiJson, callAiText } from "./ai-provider.server";
 
 function cleanTitle(value: unknown) {
@@ -181,6 +181,20 @@ export const connectEbayWithCode = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+/**
+ * Disconnect eBay (audit #51): removes the saved seller token so eBay
+ * calls stop. Listings and drafts already in the app are NOT deleted, and
+ * nothing is ended on eBay. Confirmation happens in the Settings UI.
+ */
+export const disconnectEbay = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }: any) => {
+    const { error } = await context.supabase.from("integration_credentials").delete().eq("user_id", context.userId).eq("provider", "ebay").eq("label", "default");
+    if (error) throw new Error("Could not disconnect eBay. Please retry.");
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "info", category: "ebay", message: "eBay disconnected in Settings" });
+    return { ok: true };
+  });
+
 export const syncEbayListings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { entriesPerPage?: number }) => data)
@@ -252,17 +266,23 @@ async function syncEbayListingsInner(data: { entriesPerPage?: number }, context:
     // inventory items first and fetch each SKU's offer instead; a bad SKU
     // then fails only its own lookup.
     let usedInventoryFallback = false;
+    let inventoryFallbackError: string | null = null;
     if (totalSynced === 0 && !retrievedAnyOfferData) {
-      const viaInventory = await fetchPublishedOffersViaInventory(token);
-      usedInventoryFallback = true;
-      // The inventory phase re-examines the same underlying offers the
-      // probing phase could not retrieve, so its counts supersede the
-      // probing phase's — carrying both over double-counts (e.g. "653
-      // skipped" against "454 total").
-      grandTotal = viaInventory.total;
-      totalSkipped = viaInventory.skipped;
-      for (const item of viaInventory.items) await upsertItem(item);
-      totalSynced += viaInventory.items.length;
+      try {
+        const viaInventory = await fetchPublishedOffersViaInventory(token);
+        usedInventoryFallback = true;
+        // The inventory phase re-examines the same underlying offers the
+        // probing phase could not retrieve, so its counts supersede the
+        // probing phase's — carrying both over double-counts (e.g. "653
+        // skipped" against "454 total").
+        grandTotal = viaInventory.total;
+        totalSkipped = viaInventory.skipped;
+        for (const item of viaInventory.items) await upsertItem(item);
+        totalSynced += viaInventory.items.length;
+      } catch (e) {
+        inventoryFallbackError = e instanceof Error ? e.message : String(e);
+        console.error("[ebay-sync] inventory-first fallback failed:", inventoryFallbackError);
+      }
     }
     // Real traffic (views/clicks/sales, last 30 days) from the Analytics API.
     // Best-effort: a traffic failure must never fail the sync itself — the
@@ -274,20 +294,20 @@ async function syncEbayListingsInner(data: { entriesPerPage?: number }, context:
     } catch (e) {
       traffic = { updated: 0, total: syncedItemIds.length, error: e instanceof Error ? e.message : String(e) };
     }
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)${totalSkipped ? `, ${totalSkipped} skipped (bad data)` : ""}${usedInventoryFallback ? " · via inventory list (offer list rejected by eBay)" : ""}`, metadata: { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null, viaInventory: usedInventoryFallback } });
-    return { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null };
+    // Sync 0-result (audit #1/#3/#54): 0 imported is NOT a success — the
+    // user has no active listings, or the route itself failed. Log it at
+    // level "warn" and name the reason, so the toast reads as a warning.
+    const level = totalSynced === 0 ? "warn" : "success";
+    const reason = totalSynced === 0
+      ? (inventoryFallbackError
+        ? `Sync finished — 0 listings imported. eBay error: ${inventoryFallbackError}`
+        : `Sync finished — 0 listings imported. 0 published offers found — the account has no active listings${grandTotal ? ` (${grandTotal} inventory items, none published)` : ""}`)
+      : null;
+    const message = reason
+      ?? `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)${totalSkipped ? `, ${totalSkipped} skipped (bad data)` : ""}${usedInventoryFallback ? " · via inventory list (offer list rejected by eBay)" : ""}`;
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level, category: "ebay", message, metadata: { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null, viaInventory: usedInventoryFallback } });
+    return { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null, level, reason };
   }
-
-// Refresh views/clicks/sales from the eBay Analytics traffic report without
-// re-syncing offers. Used by the Optimizer page so a stale traffic stamp
-// can be fixed on demand.
-export const refreshEbayTraffic = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .handler(async ({ context }: any) => {
-    const token = await getFreshEbayToken(context.supabase, context.userId);
-    const { refreshListingTraffic } = await import("./ebay/analytics.server");
-    return refreshListingTraffic(context.supabase, context.userId, token);
-  });
 
 // End one listing from the Listings page. Variant listings are ended as a
 // group (see endEbayListingRow); single listings withdraw their offer.
@@ -321,8 +341,9 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
     // Server-side guardrail (bug 4): with "Live Push to eBay" OFF in Rules
     // nothing may publish — a push attempted a real publish while OFF
     // because this check did not exist. Read the row exactly the way the
-    // Rules page does and refuse before touching eBay.
-    const { data: rule } = await context.supabase.from("automation_rules").select("live_listing_enabled").eq("user_id", context.userId).maybeSingle();
+    // Rules page does and refuse before touching eBay. Select * so the
+    // Best Offer settings travel with the row (no second query).
+    const { data: rule } = await context.supabase.from("automation_rules").select("*").eq("user_id", context.userId).maybeSingle();
     if (!rule?.live_listing_enabled) {
       throw new Error("Live push is off in Rules — turn it on to publish.");
     }
@@ -347,11 +368,13 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
         }
         // Ensure start_country is set from CJ so inventory location is valid.
         let workingDraft = draft;
+        let cjDetailForStock: any = null;
         if (!draft.profit?.start_country) {
           try {
             const { cjProductDetail, getUserCjToken } = await import("./cj.server");
             const cjToken = await getUserCjToken(context.supabase, context.userId);
             const detail: any = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", cjToken);
+            cjDetailForStock = detail;
             const startCountry = compactCountry(detail?.countryCode || detail?.countryFrom || detail?.sourceFrom, "CN");
             const warehouse = await resolveCjWarehouse(context, startCountry);
             workingDraft = { ...draft, profit: { ...(draft.profit || {}), start_country: startCountry, cj_warehouse: warehouse || draft.profit?.cj_warehouse || null } };
@@ -364,14 +387,29 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
             await context.supabase.from("listing_drafts").update({ profit: workingDraft.profit }).eq("id", draft.id);
           }
         }
+        // CJ stock guard (sales feature #4): refuse the push when CJ is
+        // definitively out of stock for this product. Reuse the detail
+        // fetched above when available; otherwise fetch it once here.
+        if (draft.cj_product_id) {
+          try {
+            if (!cjDetailForStock) {
+              const { cjProductDetail, getUserCjToken } = await import("./cj.server");
+              cjDetailForStock = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", await getUserCjToken(context.supabase, context.userId));
+            }
+            if (cjStockIsZero(cjDetailForStock)) throw new Error("Out of stock at CJ — cannot push");
+          } catch (e) {
+            if (e instanceof Error && /Out of stock at CJ/.test(e.message)) throw e;
+            /* CJ lookup failed — do not block the push on an unknown stock state. */
+          }
+        }
         let pushed: any;
         try {
-          pushed = await publishInventoryItem(token, workingDraft);
+          pushed = await publishInventoryItem(token, workingDraft, { bestOffer: rule });
         } catch (firstError) {
           const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
           if (!draft.cj_product_id || !shouldAutoRepair(firstMessage)) throw firstError;
           workingDraft = await autoRepairDraftFromCj(context, workingDraft, firstMessage);
-          pushed = await publishInventoryItem(token, workingDraft);
+          pushed = await publishInventoryItem(token, workingDraft, { bestOffer: rule });
         }
         await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: draft.sku, title: draft.title, price: draft.price, cj_product_id: draft.cj_product_id, status: "active", cj_landed_cost: Number((draft.profit || {}).item_cost || 0) + Number((draft.profit || {}).shipping || 0) });
         // Auto-remove pushed draft from queue.
@@ -430,11 +468,45 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
     if (!data.dryRun) requireLiveOptimizer(rule, token);
     const daysNoSales = Number(rule?.optimizer_no_sales_days ?? 30);
     const daysNoViewsRewrite = Number(rule?.optimizer_low_views_days ?? 14);
-    const poorExposureDays = Number(rule?.optimizer_poor_exposure_days ?? 45);
+    const poorExposureDays = Number(rule?.optimizer_poor_exposure_days ?? 14);
+    // Traffic refresh is part of a run now (removal F): the standalone
+    // "Refresh traffic" button is gone. Dry-runs read the last sync's data.
+    if (!data.dryRun && token) {
+      try {
+        const { refreshListingTraffic } = await import("./ebay/analytics.server");
+        await refreshListingTraffic(context.supabase, context.userId, token);
+      } catch {
+        /* Best-effort — the traffic gate below still applies. */
+      }
+    }
     let q = context.supabase.from("ebay_listings").select("*").eq("user_id", context.userId).eq("status", "active");
     if (data.listingIds?.length) q = q.in("id", data.listingIds);
     const { data: listings, error } = await q;
     if (error) throw error;
+    // Promoted auto-rules (sales feature #3, Rules-gated, default OFF):
+    // map each RUNNING campaign's ads to listingIds so the auto-pause rule
+    // can attribute views/sales to the campaign. Best-effort — if the ads
+    // fetch fails for a campaign it is skipped, never paused blindly.
+    const promotedAutoOn = rule?.promoted_auto_enabled === true;
+    const promotedMaxRate = Number(rule?.promoted_auto_max_rate_percent ?? 10);
+    const campaignAds = new Map<string, { campaignId: string; campaignName: string; startedAt: string | null; listingIds: string[] }>();
+    if (promotedAutoOn && !data.dryRun && token) {
+      try {
+        const svc = new EbayMarketingService(new EbayRestClient(token));
+        const page = await svc.campaigns(0);
+        for (const c of page.campaigns || []) {
+          if (c.campaignStatus !== "RUNNING") continue;
+          try {
+            const ads = await svc.ads(c.campaignId);
+            campaignAds.set(c.campaignId, { campaignId: c.campaignId, campaignName: c.campaignName, startedAt: c.startDate || null, listingIds: (ads.ads || []).map((a: any) => a.listingId).filter(Boolean) });
+          } catch {
+            /* Skip this campaign — never pause blindly. */
+          }
+        }
+      } catch {
+        /* Campaigns unavailable — promoted rules skip this run. */
+      }
+    }
     const actions: { id: string; title: string; action: string; detail?: string; error?: string }[] = [];
     for (const l of listings || []) {
       const listedAt = l.listed_at ? new Date(l.listed_at) : null;
@@ -443,10 +515,73 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
       // (see refreshListingTraffic). Do not take destructive decisions from
       // stale or unavailable measurements.
       if (!hasFreshTraffic(l.last_traffic_check) && !/ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "")) {
-        actions.push({ id: l.id, title: l.title, action: "metrics_unavailable", detail: "No fresh traffic data (last 24h). Sync eBay listings or use Refresh traffic on this page, then run again — no changes applied." });
+        actions.push({ id: l.id, title: l.title, action: "metrics_unavailable", detail: "No fresh traffic data (last 24h). Sync eBay listings, then run again — no changes applied." });
         continue;
       }
+      // CJ stock guard (sales feature #4): flag (dry-run) / end (run) an
+      // active listing whose CJ product is definitively out of stock, so
+      // it cannot sell and fail to ship. Unknown stock never acts.
+      if (l.cj_product_id) {
+        let outOfStock = false;
+        try {
+          const { cjProductDetail, getUserCjToken } = await import("./cj.server");
+          const detail = await cjProductDetail(l.cj_product_id, "US", await getUserCjToken(context.supabase, context.userId));
+          outOfStock = cjStockIsZero(detail);
+        } catch {
+          /* CJ lookup failed — do not act on unknown stock. */
+        }
+        if (outOfStock) {
+          const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: l.id, title: l.title, action: data.dryRun ? "cj_out_of_stock" : "ended_out_of_stock", detail: "CJ stock is 0 — end the listing before it sells and cannot ship" };
+          actions.push(action);
+          if (!data.dryRun) {
+            try {
+              requireListingIdentity(l.ebay_item_id, l.ebay_offer_id);
+              if (!token) throw new Error("Reconnect eBay first.");
+              await endEbayListingRow(token, l);
+              const saved = await context.supabase.from("ebay_listings").update({ status: "ended", ended_at: new Date().toISOString() }).eq("id", l.id);
+              if (saved.error) throw new Error("eBay ended the listing, but saving failed. Re-sync listings.");
+            } catch (e) {
+              action.error = e instanceof Error ? e.message : String(e);
+              action.action = "failed";
+            }
+          }
+          continue;
+        }
+      }
       if (ageDays >= daysNoSales && (l.sales || 0) === 0) {
+        // Price-drop ladder (sales feature #5): a 5% cut (floor- and
+        // cap-bounded) is tried BEFORE ending — if a drop applies, the
+        // listing gets one more chance this run instead of being ended.
+        const drop = priceDropFor(l, rule);
+        if (drop) {
+          const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: l.id, title: l.title, action: data.dryRun ? "price_drop_recommended" : "price_dropped", detail: `Price $${Number(l.price || 0).toFixed(2)} → $${drop.newPrice.toFixed(2)} (floor $${drop.floor.toFixed(2)}, cap $${drop.capPrice.toFixed(2)})` };
+          actions.push(action);
+          if (!data.dryRun) {
+            try {
+              requireListingIdentity(l.ebay_item_id, l.ebay_offer_id);
+              if (!token) throw new Error("Reconnect eBay first.");
+              // Single-variant only: revising only the first variant of a
+              // group listing would price it wrong. Same group detection
+              // as endEbayListingRow (deterministic group key lookup).
+              const { variantGroupKeyFor } = await import("./ebay/inventory.server");
+              const groupKey = variantGroupKeyFor(l.sku || undefined, l.cj_product_id || undefined);
+              let isGroup = false;
+              try {
+                await new EbayRestClient(token).json(`/sell/inventory/v1/inventory_item_group/${encodeURIComponent(groupKey)}`);
+                isGroup = true;
+              } catch {
+                isGroup = false;
+              }
+              if (isGroup) throw new Error("Group (multi-variant) listing — price drops are not applied to variant listings yet.");
+              await reviseOfferPrice(token, l.ebay_offer_id, drop.newPrice);
+              const saved = await context.supabase.from("ebay_listings").update({ price: drop.newPrice }).eq("id", l.id);
+              if (saved.error) throw new Error("eBay repriced the listing, but saving failed. Re-sync listings.");
+            } catch (e) {
+              action.error = e instanceof Error ? e.message : String(e);
+            }
+          }
+          continue;
+        }
         const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: l.id, title: l.title, action: data.dryRun ? "end_recommended" : "ended", detail: `${ageDays}d no sales` };
         actions.push(action);
         if (!data.dryRun) {
@@ -462,6 +597,26 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
           }
         }
         continue;
+      }
+      // Promoted auto-rules (sales feature #3): views but no sales after
+      // N days -> auto-create ONE FIXED campaign at the capped rate.
+      // Promoted Listings Standard is COST_PER_SALE, so spend only happens
+      // on a sale — the trigger is views without a sale, not spend.
+      if (promotedAutoOn && ageDays >= daysNoSales && (l.sales || 0) === 0 && (l.views || 0) > 0) {
+        const alreadyPromoted = [...campaignAds.values()].some((c) => c.listingIds.includes(l.ebay_item_id));
+        if (!alreadyPromoted) {
+          const campaignName = `Auto — ${l.title}`.slice(0, 80);
+          const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: l.id, title: l.title, action: data.dryRun ? "promote_recommended" : "promoted", detail: `Create Promoted Listings (FIXED ${promotedMaxRate}%) — ${l.views} views, no sales in ${ageDays}d` };
+          actions.push(action);
+          if (!data.dryRun && token) {
+            try {
+              campaignInput.parse({ name: campaignName, strategy: "FIXED", rate: promotedMaxRate, listingIds: [l.ebay_item_id] });
+              await new EbayMarketingService(new EbayRestClient(token)).create({ name: campaignName, strategy: "FIXED", rate: promotedMaxRate, listingIds: [l.ebay_item_id] });
+            } catch (e) {
+              action.error = e instanceof Error ? e.message : String(e);
+            }
+          }
+        }
       }
       const needsRewrite = /ban\s+the\s+sale\s+of\s+amazon/i.test(l.title || "") || (l.views || 0) === 0 || (ageDays >= daysNoViewsRewrite && (l.views || 0) < 5) || (ageDays >= poorExposureDays && (l.clicks || 0) === 0);
       if (needsRewrite) {
@@ -488,6 +643,28 @@ export const runOptimizerRules = createServerFn({ method: "POST" })
           } catch (e) {
             action.error = e instanceof Error ? e.message : String(e);
           }
+        }
+      }
+    }
+    // Auto-pause campaigns with views but no sales (promoted auto-rules):
+    // a RUNNING campaign started >= daysNoSales ago whose ads' listings
+    // ALL have views > 0 and sales == 0 gets paused.
+    if (promotedAutoOn && !data.dryRun && token && campaignAds.size) {
+      for (const c of campaignAds.values()) {
+        const started = c.startedAt ? new Date(c.startedAt) : null;
+        const campaignAgeDays = started ? Math.floor((Date.now() - started.getTime()) / 86400000) : 0;
+        if (campaignAgeDays < daysNoSales) continue;
+        const adsListings = (listings || []).filter((l: any) => c.listingIds.includes(l.ebay_item_id));
+        if (!adsListings.length) continue;
+        const allViewsNoSales = adsListings.every((l: any) => (l.views || 0) > 0 && (l.sales || 0) === 0);
+        if (!allViewsNoSales) continue;
+        const action: { id: string; title: string; action: string; detail?: string; error?: string } = { id: c.campaignId, title: c.campaignName, action: "campaign_paused", detail: `Promoted campaign ${campaignAgeDays}d old, views but no sales — paused` };
+        actions.push(action);
+        try {
+          await new EbayMarketingService(new EbayRestClient(token)).action(c.campaignId, "pause");
+        } catch (e) {
+          action.error = e instanceof Error ? e.message : String(e);
+          action.action = "failed";
         }
       }
     }
@@ -525,14 +702,6 @@ export const listEbayReturns = createServerFn({ method: "POST" })
     return new EbayReturnService(new EbayRestClient(token, "EBAY_US", { authScheme: "IAF" })).searchReturns(data.offset ?? 0, data.filter);
   });
 
-export const getEbayReturn = createServerFn({ method: "POST" })
-  .middleware([requireSupabaseAuth])
-  .inputValidator((data: { returnId: string }) => data)
-  .handler(async ({ data, context }: any) => {
-    const token = await getFreshEbayToken(context.supabase, context.userId);
-    return new EbayReturnService(new EbayRestClient(token, "EBAY_US", { authScheme: "IAF" })).returnById(data.returnId);
-  });
-
 export const listEbayNotificationTopics = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .handler(async () => {
@@ -563,7 +732,105 @@ export const createEbayNotificationSubscription = createServerFn({ method: "POST
 export const listEbayCampaigns = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { offset?: number }) => data)
-  .handler(async ({ data, context }: any) => new EbayMarketingService(await ebayClientFor(context)).campaigns(data.offset ?? 0));
+  .handler(async ({ data, context }: any) => {
+    const svc = new EbayMarketingService(await ebayClientFor(context));
+    const page = await svc.campaigns(data.offset ?? 0);
+    // Attach the listings-included count per campaign (best-effort — the
+    // campaign list itself carries no ad count). Performance
+    // (clicks/impressions/spend/sales) is NOT in this API at all; it lives
+    // in eBay's Seller Hub, so the card says so instead of inventing it.
+    const campaigns = await Promise.all((page.campaigns || []).map(async (c: any) => {
+      let adCount: number | null = null;
+      try {
+        const ads = await svc.ads(c.campaignId);
+        adCount = (ads.ads || []).length;
+      } catch {
+        adCount = null;
+      }
+      return { ...c, adCount };
+    }));
+    return { ...page, campaigns };
+  });
+
+/** Ended offers (sales feature #1): the "Ended" tab on Listings. Read-only
+ * enumeration via the inventory route; never publishes or ends anything. */
+export const listEndedEbayOffers = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }: any) => {
+    const token = await getFreshEbayToken(context.supabase, context.userId);
+    return fetchEndedOffersViaInventory(token);
+  });
+
+/**
+ * Relist an ended listing (sales feature #1): rebuilds the draft from the
+ * CJ product behind the SKU and inserts it as a PENDING draft with a fresh
+ * AI title and the current pricing rules. NEVER publishes — the user
+ * approves the draft and pushes it themselves.
+ */
+export const relistEndedListing = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { sku: string; title?: string; categoryId?: string }) => data)
+  .handler(async ({ data, context }: any) => {
+    const { data: rule } = await context.supabase.from("automation_rules").select("*").eq("user_id", context.userId).maybeSingle();
+    const { cjSearchProducts, cjProductDetail, getUserCjToken, cjFreightCalculate } = await import("./cj.server");
+    const { buildCjDraftRow } = await import("./draft-from-cj");
+    const cjToken = await getUserCjToken(context.supabase, context.userId);
+    // Match the CJ product by its SKU. Prefer an exact productSku match;
+    // a single search result is the fallback; anything else is an error.
+    const search = await cjSearchProducts({ keyword: data.sku }, cjToken);
+    const list = search.list || [];
+    const exact = list.find((p: any) => String(p.productSku || "").toUpperCase() === String(data.sku).toUpperCase());
+    const product = exact || (list.length === 1 ? list[0] : null);
+    if (!product) throw new Error(`No CJ product matches SKU ${data.sku} — it may have been removed from CJ, or the SKU is not a CJ SKU.`);
+    const detail: any = await cjProductDetail(product.pid, "US", cjToken);
+    const primaryVariant = detail?.variants?.[0] || detail?.variantList?.[0] || null;
+    const itemCost = Number(primaryVariant?.variantSellPrice ?? detail?.sellPrice) || 0;
+    // Freight quote for the primary variant (cheapest option; 0 when CJ
+    // has no quote — the push preflight blocks a 0-shipping push).
+    let shipping = 0;
+    let carrier: { logisticName?: string; logisticAging?: string } | null = null;
+    try {
+      const options = await cjFreightCalculate({ endCountryCode: "US", products: [{ vid: primaryVariant?.vid || "", quantity: 1 }] }, cjToken);
+      const cheapest = (options || []).reduce((best: any, o: any) => (!best || Number(o.logisticPrice) < Number(best.logisticPrice) ? o : best), null);
+      if (cheapest) {
+        shipping = Number(cheapest.logisticPrice) || 0;
+        carrier = { logisticName: cheapest.logisticName, logisticAging: cheapest.logisticAging };
+      }
+    } catch {
+      shipping = 0;
+    }
+    const draft = buildCjDraftRow({ userId: context.userId, detail, itemCost, shipping, carrier, rules: rule || null, endCountry: "US", primaryVariant });
+    // Fresh AI title (same prompt style as the optimizer's title rewrite;
+    // CJ name as the fallback when AI is unavailable).
+    try {
+      const aiTitle = await callAiText(context.supabase, context.userId, {
+        system: "Rewrite this product name as an eBay listing title. Reply with ONLY the new title, nothing else. Max 80 characters, no ALL CAPS, no keyword stuffing, no other marketplace names. Keep the real product words; drop filler.",
+        user: draft.title,
+      });
+      if (aiTitle) draft.title = aiTitle.trim().replace(/^["']|["']$/g, "").slice(0, 80);
+    } catch {
+      /* AI is optional; the CJ title stands. */
+    }
+    // Keep the original eBay category from the ended offer when we have
+    // it; otherwise the draft needs a category before it can be pushed
+    // (the Drafts page blocks a push with no category).
+    const { data: inserted, error } = await context.supabase.from("listing_drafts").insert({
+      user_id: context.userId,
+      cj_product_id: String(product.pid),
+      sku: data.sku,
+      title: draft.title,
+      price: draft.price,
+      profit: draft.profit,
+      images: draft.images,
+      description: draft.description,
+      item_specifics: draft.item_specifics,
+      category_id: data.categoryId || null,
+      status: "pending",
+    }).select("id").single();
+    if (error) throw error;
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "info", category: "ebay", message: `Relisted as draft: ${draft.title}`, metadata: { draftId: inserted?.id, sku: data.sku } });
+    return { draftId: inserted?.id, title: draft.title };
+  });
 
 export const createEbayCampaign = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])

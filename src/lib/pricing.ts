@@ -4,10 +4,14 @@
  * product the same way, from the user's own automation_rules row:
  *
  *   landed   = item cost + real shipping (freight quote, or a flagged estimate)
- *   profit   = max(landed * markup%, min_profit_usd)
- *   pre-fee  = landed + profit
- *   fee      = pre-fee * (ebay_fee_buffer% + payment_fee_buffer%)
- *   sell     = pre-fee + fee, rounded up to the .99-style ladder
+ *   profit   = max(landed * markup%, min_profit_usd)          (the TARGET)
+ *   sell     = (landed + profit) / (1 - feeRate), rounded up to the .99-style ladder
+ *   fee      = sell * feeRate                                  (eBay charges
+ *                                                              the fee on the
+ *                                                              FINAL sell price,
+ *                                                              not the pre-fee
+ *                                                              subtotal)
+ *   profit shown = sell - landed - fee   (>= target after ladder rounding)
  *
  * The two buffers ARE the fee rates the user configured (defaults 15% eBay
  * + 4% payment). Never hardcode a fee percentage in a page again.
@@ -34,10 +38,15 @@ export const PRICING_DEFAULTS: Required<PricingRules> = {
 
 export type PricedDraft = {
   finalSell: number;
+  /** TARGET profit = max(landed * markup%, min_profit_usd). */
   profit: number;
+  /** SHOWN profit = finalSell - landed - ebayFee (>= target after ladder rounding). */
+  actualProfit: number;
+  /** Fee on the FINAL sell price = finalSell * feeRate. */
   ebayFee: number;
   feeRate: number;
   landed: number;
+  /** Pre-fee subtotal = landed + target profit. */
   preFeePrice: number;
   quantity: number;
 };
@@ -88,15 +97,34 @@ export function priceFromRules(
   const landed = roundMoney(parseMoney(itemCost) + parseMoney(shipping));
   const profit = Math.max(landed * (markupPct / 100), minProfit);
   const preFeePrice = landed + profit;
-  const ebayFee = preFeePrice * feeRate;
-  const finalSell = roundToLadder(preFeePrice + ebayFee, roundTo);
+  // eBay charges its fee on the FINAL sell price, not the pre-fee subtotal
+  // (audit #19): sell = (landed + profit) / (1 - feeRate), ladder-rounded
+  // up. The fee shown is sell x feeRate and the profit shown is
+  // sell - landed - fee, which is >= the target after ladder rounding.
+  const finalSell = roundToLadder((landed + profit) / (1 - feeRate), roundTo);
+  const ebayFee = roundMoney(finalSell * feeRate);
+  const actualProfit = roundMoney(finalSell - landed - ebayFee);
   return {
     finalSell,
     profit: roundMoney(profit),
-    ebayFee: roundMoney(ebayFee),
+    actualProfit,
+    ebayFee,
     feeRate,
     landed,
     preFeePrice: roundMoney(preFeePrice),
     quantity: Math.max(1, Math.floor(Number(rules?.max_listing_quantity ?? PRICING_DEFAULTS.max_listing_quantity))),
   };
+}
+
+/**
+ * Pricing copy, built as template literals so the spacing is explicit in
+ * the source (audit #24/#53: JSX `$` + expression joins rendered without
+ * spaces). The product detail page renders these verbatim.
+ */
+export function floorBindsNote(minProfit: number, markupPct: number, markupProfit: number): string {
+  return `Your $${minProfit.toFixed(2)} minimum profit applies instead — the ${markupPct}% markup would only give $${markupProfit.toFixed(2)}.`;
+}
+
+export function roundingNote(roundingGain: number, finalSell: number, actualProfit: number): string {
+  return `Includes $${roundingGain.toFixed(2)} added by rounding the price up to $${finalSell.toFixed(2)} — sell price − landed cost − fees = $${actualProfit.toFixed(2)}.`;
 }

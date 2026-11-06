@@ -63,29 +63,24 @@ function Landing() {
 
           <div className="relative">
             <div className="rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-elevated)]">
-              <div className="flex items-center justify-between mb-4">
-                <div className="text-sm font-semibold">Bulk draft preview</div>
-                <span className="text-xs rounded-full bg-muted text-muted-foreground px-2 py-0.5 font-medium">Sample data</span>
-              </div>
+              <div className="text-sm font-semibold mb-4">How it works</div>
               <div className="space-y-3">
                 {[
-                  { t: "Wireless Earbuds Pro X", p: "$24.99", m: "+38%" },
-                  { t: "LED Strip Lights 32ft RGB", p: "$15.49", m: "+42%" },
-                  { t: "Pet Grooming Vacuum Kit", p: "$59.99", m: "+31%" },
-                ].map((r) => (
-                  <div key={r.t} className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+                  { Icon: Boxes, t: "Search CJ", d: "Find products by keyword, category, country, and price." },
+                  { Icon: Sparkles, t: "Build drafts", d: "AI titles, item specifics, and smart pricing from your rules." },
+                  { Icon: Zap, t: "Push to eBay", d: "Preflight checks, then bulk-push through the Inventory API." },
+                  { Icon: LineChart, t: "Optimize & sync", d: "Sync views, clicks, and sales; the optimizer flags what to fix." },
+                ].map(({ Icon, t, d }) => (
+                  <div key={t} className="flex items-start gap-3 rounded-lg border border-border px-4 py-3">
+                    <div className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><Icon className="h-4 w-4" /></div>
                     <div>
-                      <div className="text-sm font-medium">{r.t}</div>
-                      <div className="text-xs text-muted-foreground">CJ → eBay US · Active rule set</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-sm font-semibold">{r.p}</div>
-                      <div className="text-xs text-success">{r.m}</div>
+                      <div className="text-sm font-medium">{t}</div>
+                      <div className="text-xs text-muted-foreground">{d}</div>
                     </div>
                   </div>
                 ))}
               </div>
-              <p className="mt-4 text-xs text-muted-foreground">Example products and prices — not live listings. Your own drafts appear here after you sign in.</p>
+              <p className="mt-4 text-xs text-muted-foreground">Your own drafts appear here after you sign in.</p>
             </div>
           </div>
         </div>
@@ -93,9 +88,9 @@ function Landing() {
 
       <section className="max-w-7xl mx-auto px-6 py-20 grid md:grid-cols-3 gap-6">
         {[
-          { Icon: Boxes, t: "Fetch CJ inventory", d: "Search CJ Dropshipping by category, country, price, weight, ratings — cache only the winners." },
+          { Icon: Boxes, t: "Fetch CJ inventory", d: "Search CJ Dropshipping by keyword, category, country, and price — cache only the winners." },
           { Icon: Zap, t: "Bulk-list to eBay", d: "Generate optimized drafts, approve in one click, push to your eBay account via the Inventory API." },
-          { Icon: LineChart, t: "Optimize after launch", d: "Track views, clicks, sales and CJ stock; the optimizer recommends rewrites, price moves, or end." },
+          { Icon: LineChart, t: "Optimize after launch", d: "Track views, clicks, and sales; the optimizer recommends rewrites, price moves, or ending a listing." },
         ].map(({ Icon, t, d }) => (
           <div key={t} className="rounded-2xl border border-border bg-card p-6 shadow-[var(--shadow-card)]">
             <div className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary"><Icon className="h-5 w-5" /></div>

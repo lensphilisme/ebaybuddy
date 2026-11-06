@@ -6,5 +6,4 @@ export * from "./ebay/listings.server";
 export type { EbayActiveListing } from "./ebay/contracts";
 export * from "./ebay/orders.server";
 export * from "./ebay/notifications.server";
-export * from "./ebay/metadata.server";
 export * from "./ebay/rest.server";

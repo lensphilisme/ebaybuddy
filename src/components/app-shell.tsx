@@ -8,7 +8,6 @@ import {
   Settings2,
   Sliders,
   LogOut,
-  Bell,
   ShoppingBag,
   Megaphone,
 } from "lucide-react";
@@ -95,19 +94,21 @@ export function AppShell({ children, title, subtitle, actions }: {
         <header className="h-16 border-b border-border bg-card/80 backdrop-blur sticky top-0 z-30 flex items-center px-4 lg:px-8 gap-3">
           <Link to="/dashboard" className="lg:hidden"><BrandLogo size="sm" /></Link>
           <div className="hidden md:block flex-1 min-w-0">
-            <h1 className="text-lg font-semibold leading-none truncate">{title}</h1>
+            <h1 className="text-xl font-semibold leading-none truncate">{title}</h1>
             {subtitle && <p className="text-xs text-muted-foreground mt-1 truncate">{subtitle}</p>}
           </div>
           <div className="ml-auto flex items-center gap-2">
             {actions}
-            <Button asChild variant="ghost" size="icon" aria-label="Notifications">
-              <Link to="/settings" hash="notifications"><Bell className="h-4 w-4" /></Link>
+            {/* Plain text link, not a bell icon (audit #9): the bell only
+                linked to Settings and read as an inbox. No inbox is built. */}
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/settings" hash="notifications">Notifications</Link>
             </Button>
           </div>
         </header>
         <main className="flex-1 p-4 pb-24 lg:p-8 max-w-[1400px] w-full mx-auto">
           <div className="md:hidden mb-6">
-            <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+            <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
             {subtitle && <p className="text-sm text-muted-foreground mt-1">{subtitle}</p>}
           </div>
           {children}

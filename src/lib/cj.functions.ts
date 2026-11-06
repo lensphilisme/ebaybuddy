@@ -83,6 +83,20 @@ export const saveCjApiKey = createServerFn({ method: "POST" })
     return { ok: true };
   });
 
+/**
+ * Disconnect CJ (audit #51): removes the saved API key (and its cached
+ * access token) so CJ calls stop. Drafts and listings already in the app
+ * are NOT deleted. Confirmation happens in the Settings UI.
+ */
+export const disconnectCj = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }: any) => {
+    const { error } = await context.supabase.from("integration_credentials").delete().eq("user_id", context.userId).eq("provider", "cj").eq("label", "default");
+    if (error) throw new Error("Could not disconnect CJ. Please retry.");
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "info", category: "cj", message: "CJ disconnected in Settings" });
+    return { ok: true };
+  });
+
 // Reports connection status considering per-user creds first, then env fallback.
 export const getIntegrationStatus = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])

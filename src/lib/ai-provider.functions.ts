@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { normalizeAiConfig, validateAiConfig, getAiConfigStatus } from "./ai-provider.server";
+import { normalizeAiConfig, validateAiConfig, getAiConfigStatus, getUserAiConfig } from "./ai-provider.server";
 
 /** Save (or replace) the user's AI provider + key. Validates live first, like CJ. */
 export const saveAiProvider = createServerFn({ method: "POST" })
@@ -45,3 +45,19 @@ export const removeAiProvider = createServerFn({ method: "POST" })
 export const getAiProviderStatus = createServerFn({ method: "GET" })
   .middleware([requireSupabaseAuth])
   .handler(async ({ context }: any) => getAiConfigStatus(context.supabase, context.userId));
+
+/**
+ * Test the SAVED key (audit #50): re-validates the stored provider + key
+ * live and reports whether it still works. "Key invalid" shows when the
+ * saved key is rejected — the user then replaces it.
+ */
+export const testAiProvider = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }: any) => {
+    const config = await getUserAiConfig(context.supabase, context.userId);
+    if (!config) throw new Error("No AI key saved — paste a key in Settings first.");
+    await validateAiConfig(config);
+    const { error } = await context.supabase.from("integration_credentials").update({ last_validated_at: new Date().toISOString() }).eq("user_id", context.userId).eq("provider", "ai").eq("label", "default");
+    if (error) throw new Error("Key works, but saving the check failed. Retry.");
+    return { ok: true, provider: config.provider, model: config.model };
+  });

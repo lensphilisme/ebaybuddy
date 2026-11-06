@@ -5,6 +5,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { listEbayOrders, listEbayDisputes, listEbayReturns } from "@/lib/ebay.functions";
 import { AppShell } from "@/components/app-shell";
 import { AsyncResult } from "@/components/async-result";
+import { EmptyState } from "@/components/empty-state";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -34,10 +35,17 @@ function OrdersPage() {
   const refresh = async () => {
     const result = await active.refetch();
     if (result.isError) toast.error(`Refresh failed: ${(result.error as Error)?.message || "eBay request failed"}`);
-    else toast.success(`${view === "orders" ? "Orders" : view === "disputes" ? "Payment disputes" : "Returns"} refreshed`);
+    else {
+      // Refresh toast names the count + time (audit #41).
+      const count = view === "orders" ? (orders.data?.orders || []).length : view === "disputes" ? (disputes.data?.paymentDisputeSummaries || []).length : (returns.data?.returns || []).length;
+      const time = new Date().toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+      const label = view === "orders" ? "Orders" : view === "disputes" ? "Payment disputes" : "Returns";
+      toast.success(`${label} refreshed · ${count} ${view === "orders" ? "order" : view === "disputes" ? "dispute" : "return"}${count === 1 ? "" : "s"} · ${time}`);
+    }
   };
   return <AppShell title="Orders & disputes" subtitle="Sales and fulfillment from your eBay account" actions={<Button variant="outline" size="sm" onClick={refresh} disabled={active.isFetching}>{active.isFetching ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-1" />}Refresh</Button>}>
-    <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+    <div className="space-y-6">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <Tabs value={view} onValueChange={(value) => { setView(value); setOffset(0); }}><TabsList><TabsTrigger value="orders">Orders</TabsTrigger><TabsTrigger value="disputes">Payment disputes</TabsTrigger><TabsTrigger value="returns">Returns</TabsTrigger></TabsList></Tabs>
       {view === "orders" && <Select value={status} onValueChange={(value) => { setStatus(value); setOffset(0); }}><SelectTrigger className="w-48" aria-label="Fulfillment status"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="ALL">All orders</SelectItem><SelectItem value="NOT_STARTED">Not started</SelectItem><SelectItem value="IN_PROGRESS">In progress</SelectItem><SelectItem value="FULFILLED">Fulfilled</SelectItem></SelectContent></Select>}
       {view === "returns" && <Button asChild variant="outline" size="sm"><a href="https://www.ebay.com/sh/ord/return" target="_blank" rel="noreferrer">Manage returns on eBay<ExternalLink className="ml-2 h-3 w-3" /></a></Button>}
@@ -55,8 +63,17 @@ function OrdersPage() {
         </div>
         <Button asChild variant="outline" size="sm"><a href="https://www.ebay.com/sh/ord/return" target="_blank" rel="noreferrer">Handle on eBay<ExternalLink className="ml-2 h-3 w-3" /></a></Button>
       </article>)}
-      {total === 0 && <div className="py-16 text-center text-muted-foreground">{view === "returns" ? <Undo2 className="mx-auto mb-3 h-8 w-8" /> : view === "disputes" ? <ShieldCheck className="mx-auto mb-3 h-8 w-8" /> : <Package className="mx-auto mb-3 h-8 w-8" />}{view === "disputes" ? "No payment disputes — you're all clear." : `No ${view} found.`}</div>}
+      {total === 0 && (
+        <div className="py-6">
+          <EmptyState
+            icon={view === "returns" ? Undo2 : view === "disputes" ? ShieldCheck : Package}
+            title={view === "disputes" ? "No payment disputes — you're all clear." : `No ${view} found.`}
+            help={view === "disputes" ? undefined : "Orders appear here once a buyer checks out on eBay."}
+          />
+        </div>
+      )}
     </div>}
-    <div className="mt-5 flex items-center justify-between"><span className="text-sm text-muted-foreground">{total ? `${offset + 1}–${Math.min(offset + 50, total)} of ${total}` : "0 results"}</span><div className="flex gap-2"><Button variant="outline" size="icon" aria-label="Previous page" disabled={offset === 0 || active.isFetching} onClick={() => setOffset(Math.max(0, offset - 50))}><ChevronLeft className="h-4 w-4" /></Button><Button variant="outline" size="icon" aria-label="Next page" disabled={offset + 50 >= total || active.isFetching} onClick={() => setOffset(offset + 50)}><ChevronRight className="h-4 w-4" /></Button></div></div>
+    <div className="flex items-center justify-between"><span className="text-sm text-muted-foreground">{total ? `${offset + 1}–${Math.min(offset + 50, total)} of ${total}` : "0 results"}</span><div className="flex gap-2"><Button variant="outline" size="icon" aria-label="Previous page" disabled={offset === 0 || active.isFetching} onClick={() => setOffset(Math.max(0, offset - 50))}><ChevronLeft className="h-4 w-4" /></Button><Button variant="outline" size="icon" aria-label="Next page" disabled={offset + 50 >= total || active.isFetching} onClick={() => setOffset(offset + 50)}><ChevronRight className="h-4 w-4" /></Button></div></div>
+    </div>
   </AppShell>;
 }

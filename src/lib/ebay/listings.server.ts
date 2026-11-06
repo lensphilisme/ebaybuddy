@@ -112,12 +112,44 @@ export async function fetchPublishedOffersPage(
  * bad SKU fails only its own per-SKU fetch and is skipped, never the
  * whole sync. Used as the fallback when the offer list returns no data.
  */
-export async function fetchPublishedOffersViaInventory(
+export type EndedOffer = {
+  offerId: string;
+  sku: string;
+  title: string;
+  price: number;
+  currency: string;
+  /** The eBay category the offer was listed under — carried into the
+   * relist draft so it does not need to be re-picked. */
+  categoryId?: string | null;
+  listingId?: string | null;
+  imageUrl?: string;
+};
+
+/** Join an ENDED offer to its inventory item. Unlike mapOfferToActiveListing,
+ * an ended offer need not carry a listingId (the listing is withdrawn), so
+ * this mapping does not require one. */
+export function mapOfferToEndedListing(offer: OfferRecord, item?: InventoryRecord | null): EndedOffer | null {
+  const price = offer.pricingSummary?.price;
+  return {
+    offerId: offer.offerId,
+    sku: sanitizeSku(offer.sku),
+    title: item?.product?.title || offer.sku,
+    price: Number(price?.value || 0),
+    currency: price?.currency || "USD",
+    categoryId: typeof offer.categoryId === "string" ? offer.categoryId : null,
+    listingId: offer.listing?.listingId || null,
+    imageUrl: item?.product?.imageUrls?.[0],
+  };
+}
+
+async function fetchOffersViaInventory<T>(
   accessToken: string,
-  maxItems = 1000,
-): Promise<{ total: number; items: EbayActiveListing[]; skipped: number }> {
+  maxItems: number,
+  wantedStatus: "PUBLISHED" | "ENDED",
+  map: (offer: OfferRecord, item: InventoryRecord) => T | null,
+): Promise<{ total: number; items: T[]; skipped: number }> {
   const client = new EbayRestClient(accessToken);
-  const items: EbayActiveListing[] = [];
+  const items: T[] = [];
   let skipped = 0;
   let seen = 0;
   for (let offset = 0; offset < maxItems; offset += 100) {
@@ -137,13 +169,13 @@ export async function fetchPublishedOffersViaInventory(
         const offers = await client.json<{ total: number; offers: OfferRecord[] }>(
           `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&limit=100&offset=0`,
         );
-        const published = (offers.offers || []).filter((o) => o.status === "PUBLISHED");
-        if (!published.length) {
+        const matching = (offers.offers || []).filter((o) => o.status === wantedStatus);
+        if (!matching.length) {
           skipped += 1;
           continue;
         }
-        for (const offer of published) {
-          const mapped = mapOfferToActiveListing(offer, record);
+        for (const offer of matching) {
+          const mapped = map(offer, record);
           if (mapped) items.push(mapped);
           else skipped += 1;
         }
@@ -156,6 +188,26 @@ export async function fetchPublishedOffersViaInventory(
     if (offset + records.length >= (page.total || 0)) break;
   }
   return { total: seen, items, skipped };
+}
+
+export async function fetchPublishedOffersViaInventory(
+  accessToken: string,
+  maxItems = 1000,
+): Promise<{ total: number; items: EbayActiveListing[]; skipped: number }> {
+  return fetchOffersViaInventory(accessToken, maxItems, "PUBLISHED", mapOfferToActiveListing);
+}
+
+/**
+ * Ended offers, enumerated the same inventory-first way (the unfiltered
+ * offer list rejects every page for this account — see above). Used only
+ * by the Listings "Ended" view for relisting as drafts; never by the
+ * main sync, whose behaviour is unchanged.
+ */
+export async function fetchEndedOffersViaInventory(
+  accessToken: string,
+  maxItems = 1000,
+): Promise<{ total: number; items: EndedOffer[]; skipped: number }> {
+  return fetchOffersViaInventory(accessToken, maxItems, "ENDED", mapOfferToEndedListing);
 }
 
 export async function fetchActiveEbayListings(

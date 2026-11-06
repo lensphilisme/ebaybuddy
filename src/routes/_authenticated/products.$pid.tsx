@@ -16,7 +16,7 @@ import { ArrowLeft, Loader2, Truck, FileEdit } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import DOMPurify from "dompurify";
-import { priceFromRules, parseMoney, roundMoney, PRICING_DEFAULTS } from "@/lib/pricing";
+import { priceFromRules, parseMoney, roundMoney, floorBindsNote, roundingNote, PRICING_DEFAULTS } from "@/lib/pricing";
 import { buildCjDraftRow, cleanImageList, variantAxes, variantOptionMap } from "@/lib/draft-from-cj";
 
 export const Route = createFileRoute("/_authenticated/products/$pid")({ head: () => pageHead("CJ product details", "Inspect CJ variants, images and live freight pricing."),
@@ -31,6 +31,17 @@ const COUNTRIES = [
   { code: "DE", name: "Germany" },
   { code: "FR", name: "France" },
 ];
+
+/** Image with a loading skeleton (audit #15) — no blank boxes while it loads. */
+function DetailImage({ src, alt, className }: { src: string; alt: string; className?: string }) {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <div className="relative h-full w-full">
+      {!loaded && <div className="absolute inset-0 animate-pulse bg-muted" aria-label="Loading image" />}
+      <img src={src} alt={alt} loading="lazy" onLoad={() => setLoaded(true)} className={`${className || ""} ${loaded ? "" : "opacity-0"}`} />
+    </div>
+  );
+}
 
 function ProductDetailPage() {
   const { pid } = Route.useParams();
@@ -91,12 +102,28 @@ function ProductDetailPage() {
     mutationFn: async () => {
       const vid = activeVid;
       if (!vid) throw new Error("No variant available for freight quote");
-      return freightFn({ data: { endCountryCode: country, products: [{ vid, quantity: 1 }] } });
+      const result = await freightFn({ data: { endCountryCode: country, products: [{ vid, quantity: 1 }] } });
+      setQuotedVid(vid);
+      return result;
     },
     onError: (e: Error) => toast.error(e.message),
   });
   const [selectedCarrier, setSelectedCarrier] = useState<string>("");
   const [carrierResetNote, setCarrierResetNote] = useState<string>("");
+  // The variant a quote was fetched for. When the variant changes, the
+  // quote is CLEARED (audit #20b) — the old shipping must not carry over
+  // to a different variant, and a fresh quote is required.
+  const [quotedVid, setQuotedVid] = useState<string>("");
+  useEffect(() => {
+    if (quotedVid && quotedVid !== activeVid) {
+      freight.reset();
+      setQuotedVid("");
+      setSelectedCarrier("");
+      setCarrierResetNote("");
+    }
+  }, [activeVid]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A quote only counts for the variant it was fetched for.
+  const hasQuote = Boolean(freight.data?.length) && quotedVid === activeVid;
   const carrier = freight.data?.find((o) => o.logisticName === selectedCarrier) ?? freight.data?.[0];
   const shipping = parseMoney(carrier?.logisticPrice ?? 0);
   // Never silently switch carriers: if the user's pick vanished from a
@@ -115,16 +142,16 @@ function ProductDetailPage() {
   const priced = priceFromRules(itemCost, shipping, rules, markupPct);
   const landed = priced.landed;
   const desiredProfit = priced.profit;
-  const preFeePrice = priced.preFeePrice;
   const ebayFee = priced.ebayFee;
   const finalSell = priced.finalSell;
   // Reconciling figures (bug 9): the model profit is the TARGET, but the
   // ladder-rounded sell price leaves a different ACTUAL profit. Show the
-  // actual one, and say plainly when the min-profit floor binds.
+  // actual one, and say plainly when the min-profit floor binds. The fee
+  // is on the FINAL sell price (audit #19), not the pre-fee subtotal.
   const markupProfit = roundMoney(landed * (markupPct / 100));
   const minProfit = Number(rules?.min_profit_usd ?? PRICING_DEFAULTS.min_profit_usd);
   const floorBinds = desiredProfit > markupProfit + 0.004;
-  const actualProfit = roundMoney(finalSell - landed - ebayFee);
+  const actualProfit = priced.actualProfit;
   const roundingGain = roundMoney(actualProfit - desiredProfit);
   const axes = useMemo(() => variantAxes(p?.productKeyEn, variants[0], p?.productProEnSet), [p?.productKeyEn, p?.productProEnSet, variants]);
   const selectedOptions = activeVariant ? variantOptionMap(activeVariant, axes) : {};
@@ -180,7 +207,7 @@ function ProductDetailPage() {
                 ) : images.map((src, i) => (
                   <CarouselItem key={`${src}-${i}`}>
                     <div className="aspect-square bg-muted rounded-lg overflow-hidden">
-                      <img src={src} alt={`${p.productNameEn} ${i + 1}`} className="w-full h-full object-contain" />
+                      <DetailImage src={src} alt={`${p.productNameEn} ${i + 1}`} className="w-full h-full object-contain" />
                     </div>
                   </CarouselItem>
                 ))}
@@ -190,7 +217,7 @@ function ProductDetailPage() {
             <div className="mt-3 grid grid-cols-6 gap-2 max-w-full">
               {images.slice(0, 12).map((src, i) => (
                 <div key={`${src}-thumb-${i}`} className="aspect-square bg-muted rounded overflow-hidden">
-                  <img src={src} alt="" className="w-full h-full object-cover" loading="lazy" />
+                  <DetailImage src={src} alt={`${p.productNameEn} thumbnail ${i + 1}`} className="w-full h-full object-cover" />
                 </div>
               ))}
             </div>
@@ -275,14 +302,15 @@ function ProductDetailPage() {
                 {carrierResetNote && <dd className="col-span-2 text-xs text-amber-600">{carrierResetNote}</dd>}
                 <dt className="font-medium">Landed cost</dt><dd className="text-right font-medium">${landed.toFixed(2)}</dd>
                 <dt className="text-muted-foreground">{markupPct}% markup on landed cost</dt><dd className="text-right">${markupProfit.toFixed(2)}</dd>
-                {floorBinds && <dd className="col-span-2 text-xs text-amber-600">Your ${minProfit.toFixed(2)} minimum profit applies instead — the {markupPct}% markup would only give ${markupProfit.toFixed(2)}.</dd>}
+                {floorBinds && <dd className="col-span-2 text-xs text-amber-600">{floorBindsNote(minProfit, markupPct, markupProfit)}</dd>}
                 <dt className="text-muted-foreground">Profit before fee</dt><dd className="text-right">${desiredProfit.toFixed(2)}</dd>
-                <dt className="text-muted-foreground">eBay + payment fees ({Math.round(priced.feeRate * 100)}% of ${preFeePrice.toFixed(2)})</dt><dd className="text-right">${ebayFee.toFixed(2)}</dd>
-                <dt className="font-semibold">eBay sell price</dt><dd className="text-right font-semibold text-primary">${finalSell.toFixed(2)}</dd>
+                <dt className="text-muted-foreground">eBay + payment fees ({Math.round(priced.feeRate * 100)}% of ${finalSell.toFixed(2)} final sell price)</dt><dd className="text-right">${ebayFee.toFixed(2)}</dd>
+                <dt className="font-semibold">eBay sell price</dt><dd className="text-right font-semibold text-primary">${finalSell.toFixed(2)}{!hasQuote && <span className="block text-xs font-normal text-amber-600">estimate — shipping not quoted yet</span>}</dd>
                 <dt className="font-semibold">Profit</dt><dd className={`text-right font-semibold ${actualProfit >= 0 ? "text-success" : "text-destructive"}`}>${actualProfit.toFixed(2)}</dd>
-                {roundingGain > 0.005 && <dd className="col-span-2 text-xs text-muted-foreground">Includes ${roundingGain.toFixed(2)} added by rounding the price up to ${finalSell.toFixed(2)} — sell price − landed cost − fees = ${actualProfit.toFixed(2)}.</dd>}
+                {roundingGain > 0.005 && <dd className="col-span-2 text-xs text-muted-foreground">{roundingNote(roundingGain, finalSell, actualProfit)}</dd>}
               </dl>
-              <Button className="w-full" onClick={() => sendToDraft.mutate()} disabled={sendToDraft.isPending}>
+              {!hasQuote && <p className="text-xs text-amber-600">Get a shipping quote first — the price needs real freight. The sell price above is an estimate with $0 shipping.</p>}
+              <Button className="w-full" onClick={() => sendToDraft.mutate()} disabled={sendToDraft.isPending || !hasQuote} title={!hasQuote ? "Get a shipping quote first — the price needs real freight" : undefined}>
                 <FileEdit className="h-4 w-4 mr-1" /> {sendToDraft.isPending ? "Saving…" : "Send to Drafts"}
               </Button>
             </Card>

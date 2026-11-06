@@ -148,6 +148,12 @@ export async function getAiConfigStatus(supabase: any, userId: string): Promise<
       source: "env",
     };
   }
+  // A provider can be SELECTED with no key saved yet (or a removed key) —
+  // report the selection so the UI names the provider instead of claiming
+  // "no AI provider connected" while DeepSeek is selected (audit #45/#50).
+  if (isAiProviderId(creds.provider)) {
+    return { connected: false, provider: creds.provider, model: String(creds.model || ""), source: "user" };
+  }
   return { connected: false, source: null };
 }
 

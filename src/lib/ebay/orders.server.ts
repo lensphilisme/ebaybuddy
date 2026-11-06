@@ -69,8 +69,4 @@ export class EbayReturnService {
     const members = (json.members || []).map((m) => this.mapReturn(m)).filter((r) => r.returnId);
     return { total: json.total ?? members.length, returns: members };
   }
-  async returnById(returnId: string) {
-    const json = await this.client.json<any>(`/post-order/v2/return/${encodeURIComponent(returnId)}`);
-    return this.mapReturn(json);
-  }
 }

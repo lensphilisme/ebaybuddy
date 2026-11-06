@@ -9,7 +9,7 @@
  * a search-list row. Brand comes from the CJ product when present,
  * otherwise "Unbranded" — eBay requires Brand on every listing.
  */
-import { priceFromRules, parseMoney, roundMoney, type PricingRules, PRICING_DEFAULTS } from "./pricing";
+import { priceFromRules, parseMoney, type PricingRules, PRICING_DEFAULTS } from "./pricing";
 import { sanitizeSku } from "./ebay/http";
 import type { CjProductDetail, CjVariant } from "./cj.server";
 
@@ -58,6 +58,22 @@ export function draftBrand(detail: CjProductDetail & Record<string, any>): strin
   return brand || "Unbranded";
 }
 
+/**
+ * Clean a CJ description for the draft (audit #25): descriptions must not
+ * contain embedded <img> tags (they duplicate the image gallery and bloat
+ * the eBay listing) or the dangling "Product Image:" label CJ leaves
+ * behind when the image is stripped.
+ */
+export function cleanDescription(html: unknown): string {
+  const raw = String(html ?? "");
+  if (!raw) return "";
+  return raw
+    .replace(/<img[^>]*>/gi, " ")
+    .replace(/Product Image:\s*/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function variantsOf(detail: CjProductDetail & Record<string, any>): CjVariant[] {
   return detail?.variants ?? detail?.variantList ?? detail?.productVariants ?? [];
 }
@@ -101,7 +117,7 @@ export function buildCjDraftRow(input: BuildCjDraftInput) {
   // The model's profit is the target; the ACTUAL profit is what the
   // ladder-rounded sell price leaves after landed cost + fees. Store the
   // actual one so the draft's profit figure reconciles with its price.
-  const actualProfit = roundMoney(priced.finalSell - priced.landed - priced.ebayFee);
+  const actualProfit = priced.actualProfit;
   const priceForVariant = (rawCost: unknown) => {
     const variantCost = parseMoney(rawCost) || itemCost;
     return priceFromRules(variantCost, shipping, rules, markupPct).finalSell;
@@ -126,7 +142,7 @@ export function buildCjDraftRow(input: BuildCjDraftInput) {
     price: priced.finalSell,
     quantity: priced.quantity,
     images: cleanImageList(primaryVariant?.variantImage, images).slice(0, 12),
-    description: p.description ?? "",
+    description: cleanDescription(p.description ?? ""),
     item_specifics: { Brand: brand, Condition: "New", ...selectedOptions },
     brand,
     status: "pending" as const,

@@ -49,9 +49,10 @@ export type Database = {
           allow_bold_title: boolean
           allow_promoted_listings: boolean
           allow_subtitle: boolean
+          best_offer_enabled: boolean
+          best_offer_min_percent: number
           created_at: string
           ebay_fee_buffer_percent: number
-          end_test_listings_after_success: boolean
           id: string
           live_listing_enabled: boolean
           markup_percent: number
@@ -60,8 +61,12 @@ export type Database = {
           optimizer_low_views_days: number
           optimizer_no_sales_days: number
           optimizer_poor_exposure_days: number
+          optimizer_price_drop_enabled: boolean
+          optimizer_price_drop_max_percent: number
           payment_fee_buffer_percent: number
           preflight_required: boolean
+          promoted_auto_enabled: boolean
+          promoted_auto_max_rate_percent: number
           round_to: number
           updated_at: string
           user_id: string
@@ -70,9 +75,10 @@ export type Database = {
           allow_bold_title?: boolean
           allow_promoted_listings?: boolean
           allow_subtitle?: boolean
+          best_offer_enabled?: boolean
+          best_offer_min_percent?: number
           created_at?: string
           ebay_fee_buffer_percent?: number
-          end_test_listings_after_success?: boolean
           id?: string
           live_listing_enabled?: boolean
           markup_percent?: number
@@ -81,8 +87,12 @@ export type Database = {
           optimizer_low_views_days?: number
           optimizer_no_sales_days?: number
           optimizer_poor_exposure_days?: number
+          optimizer_price_drop_enabled?: boolean
+          optimizer_price_drop_max_percent?: number
           payment_fee_buffer_percent?: number
           preflight_required?: boolean
+          promoted_auto_enabled?: boolean
+          promoted_auto_max_rate_percent?: number
           round_to?: number
           updated_at?: string
           user_id: string
@@ -91,9 +101,10 @@ export type Database = {
           allow_bold_title?: boolean
           allow_promoted_listings?: boolean
           allow_subtitle?: boolean
+          best_offer_enabled?: boolean
+          best_offer_min_percent?: number
           created_at?: string
           ebay_fee_buffer_percent?: number
-          end_test_listings_after_success?: boolean
           id?: string
           live_listing_enabled?: boolean
           markup_percent?: number
@@ -102,8 +113,12 @@ export type Database = {
           optimizer_low_views_days?: number
           optimizer_no_sales_days?: number
           optimizer_poor_exposure_days?: number
+          optimizer_price_drop_enabled?: boolean
+          optimizer_price_drop_max_percent?: number
           payment_fee_buffer_percent?: number
           preflight_required?: boolean
+          promoted_auto_enabled?: boolean
+          promoted_auto_max_rate_percent?: number
           round_to?: number
           updated_at?: string
           user_id?: string

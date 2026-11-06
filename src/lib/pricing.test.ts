@@ -1,6 +1,6 @@
 // @ts-nocheck -- run with `bun test`
 import { describe, expect, test } from "bun:test";
-import { parseMoney, roundMoney, roundToLadder, priceFromRules } from "./pricing";
+import { parseMoney, roundMoney, roundToLadder, priceFromRules, floorBindsNote, roundingNote } from "./pricing";
 import { sanitizeSku, extractEbayErrorText } from "./ebay/http";
 
 describe("parseMoney (bug 10: $NaN prices)", () => {
@@ -38,12 +38,52 @@ describe("roundToLadder / roundMoney (bug 11: float artifacts)", () => {
   });
   test("priceFromRules never returns long floats", () => {
     const p = priceFromRules(7.89, 0, { markup_percent: 35, min_profit_usd: 5, ebay_fee_buffer_percent: 15, payment_fee_buffer_percent: 4, round_to: 0.9900000095367432 });
-    for (const v of [p.finalSell, p.profit, p.ebayFee, p.landed, p.preFeePrice]) {
+    for (const v of [p.finalSell, p.profit, p.actualProfit, p.ebayFee, p.landed, p.preFeePrice]) {
       expect(v).toBe(Math.round(v * 100) / 100);
     }
     // landed 7.89, floor binds ($5 > 35% of 7.89 = $2.76): sell $15.99
     expect(p.profit).toBe(5);
     expect(p.finalSell).toBe(15.99);
+  });
+});
+
+describe("true profit (audit #19: fee is charged on the FINAL sell price)", () => {
+  const rules = { markup_percent: 35, min_profit_usd: 9, ebay_fee_buffer_percent: 15, payment_fee_buffer_percent: 4, round_to: 0.99 };
+  test("landed $9.45 / $9 floor / 19% fee — true profit is >= the $9 target", () => {
+    const p = priceFromRules(9.45, 0, rules);
+    // sell = (9.45 + 9) / 0.81 = 22.78 -> ladder 22.99; fee = 22.99 x 19% = 4.37
+    expect(p.finalSell).toBe(22.99);
+    expect(p.ebayFee).toBe(4.37);
+    expect(p.actualProfit).toBe(9.17);
+    expect(p.actualProfit).toBeGreaterThanOrEqual(9);
+    // profit shown = sell - landed - fee (the old model overstated it at $9.03 on a $21.99 sell)
+    expect(p.actualProfit).toBe(roundMoney(p.finalSell - p.landed - p.ebayFee));
+  });
+  test("landed $4.32 / $9 floor / 19% fee — true profit is >= the $9 target", () => {
+    const p = priceFromRules(4.32, 0, rules);
+    // sell = (4.32 + 9) / 0.81 = 16.44 -> ladder 16.99; fee = 16.99 x 19% = 3.23
+    expect(p.finalSell).toBe(16.99);
+    expect(p.ebayFee).toBe(3.23);
+    expect(p.actualProfit).toBe(9.44);
+    expect(p.actualProfit).toBeGreaterThanOrEqual(9);
+    expect(p.actualProfit).toBe(roundMoney(p.finalSell - p.landed - p.ebayFee));
+  });
+  test("fee is always computed on the final sell price", () => {
+    const p = priceFromRules(12.5, 3.25, rules);
+    expect(p.ebayFee).toBe(roundMoney(p.finalSell * p.feeRate));
+  });
+});
+
+describe("pricing copy spacing (audit #24/#53)", () => {
+  test("floor and rounding notes keep proper spaces around numbers", () => {
+    const floor = floorBindsNote(9, 35, 3.31);
+    expect(floor).toBe("Your $9.00 minimum profit applies instead — the 35% markup would only give $3.31.");
+    expect(floor).not.toContain("$9.00minimum");
+    expect(floor).not.toContain("the35%");
+    const rounding = roundingNote(0.14, 15.99, 9.03);
+    expect(rounding).toBe("Includes $0.14 added by rounding the price up to $15.99 — sell price − landed cost − fees = $9.03.");
+    expect(rounding).not.toContain("$0.14added");
+    expect(rounding).not.toContain("$15.99—");
   });
 });
 

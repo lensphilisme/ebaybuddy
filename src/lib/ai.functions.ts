@@ -176,9 +176,16 @@ export const optimizeDraftWithAi = createServerFn({ method: "POST" })
       brand: Array.isArray(specifics.Brand) ? specifics.Brand[0] : specifics.Brand,
       model: Array.isArray(specifics.Model) ? specifics.Model[0] : specifics.Model,
     };
+    // The fields this run actually filled (new keys, or keys that were
+    // empty before) — the toast lists them instead of a generic "done".
+    const before = (draft.item_specifics || {}) as Record<string, unknown>;
+    const filledFields = Object.keys(specifics).filter((k) => {
+      const v = before[k];
+      return v === undefined || v === null || v === "" || (Array.isArray(v) && v.length === 0);
+    });
     await context.supabase.from("listing_drafts").update(update).eq("id", draft.id);
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `AI filled item specifics: ${draft.title}`, metadata: { draftId: draft.id, aspectCount: Object.keys(specifics).length, ai: !!aiOut } });
-    return update;
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `AI filled item specifics: ${draft.title}${filledFields.length ? ` — ${filledFields.join(", ")}` : ""}`, metadata: { draftId: draft.id, aspectCount: Object.keys(specifics).length, ai: !!aiOut, filledFields } });
+    return { ...update, filledFields };
   });
 
 export const optimizeDraftCopyWithAi = createServerFn({ method: "POST" })
@@ -191,21 +198,31 @@ export const optimizeDraftCopyWithAi = createServerFn({ method: "POST" })
     let aiOut: any = null;
     try {
       aiOut = await callAiJson(context.supabase, context.userId, {
-        system: "You write eBay listing copy as JSON. Reply with ONLY a JSON object: {\"title\": \"...\", \"description\": \"...\", \"bullet_features\": [\"...\", \"...\"]}. Title max 80 characters, no ALL CAPS, no keyword stuffing, no other marketplace names. Description is plain text, 2 short paragraphs plus the bullets. Never invent features, sizes or materials not in the input.",
+        system: "You rewrite the OPENING of an eBay listing description. Reply with ONLY a JSON object: {\"title\": \"...\", \"description\": \"...\", \"bullet_features\": [\"...\", \"...\"]}. Title max 80 characters, no ALL CAPS, no keyword stuffing, no other marketplace names. Description: keep the input description's facts exactly — colours, compatibility, packing list, sizes and materials — rewrite only the opening into one short selling paragraph, then keep the rest of the detail as-is. Never invent features, sizes or materials not in the input. If the input description is empty, write a short plain description from the title only.",
         user: JSON.stringify({ title: draft.title, description: draft.description }),
       });
     } catch (e) {
       await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "warn", category: "ai", message: `AI provider failed for listing copy, used local rules: ${draft.title}`, metadata: { draftId: draft.id, error: e instanceof Error ? e.message : String(e) } });
     }
-    const out = aiOut?.title ? aiOut : local;
-        const update = {
+    // The local fallback PRESERVES the CJ description — the generic
+    // template (fallback()) is only used when there is no description at
+    // all. Replacing the full CJ detail with a template was the audit #29
+    // bug: colours, compatibility and the packing list were destroyed.
+    const aiSucceeded = Boolean(aiOut?.title);
+    const out = aiOut?.title ? aiOut : { title: draft.title, description: draft.description, bullet_features: local.bullet_features };
+    const update: Record<string, unknown> = {
       title: cleanText(out.title, draft.title).slice(0, 80),
-      description: cleanText(out.description, local.description),
+      description: cleanText(out.description, draft.description) || local.description,
       bullet_features: Array.isArray(out.bullet_features) ? out.bullet_features.map((b: unknown) => shortAspect("Features", b)).filter(Boolean).slice(0, 8) : [],
     };
+    // Mark the description as AI-optimized (audit #30): Repair reads this
+    // flag and leaves the description alone. Only set when AI actually
+    // ran — the local fallback changes nothing, so it claims nothing.
+    if (aiSucceeded) update.profit = { ...(draft.profit || {}), description_optimized_at: new Date().toISOString() };
+    const summary = aiSucceeded ? "Rewrote opening, kept colours/compatibility/packing" : "AI unavailable — kept the original description";
     await context.supabase.from("listing_drafts").update(update).eq("id", draft.id);
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `AI optimized listing copy: ${update.title}`, metadata: { draftId: draft.id, ai: !!aiOut } });
-    return update;
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `AI optimized listing copy: ${update.title} — ${summary}`, metadata: { draftId: draft.id, ai: aiSucceeded } });
+    return { ...update, summary };
   });
 
 export const repairDraftForEbay = createServerFn({ method: "POST" })
@@ -247,8 +264,17 @@ export const repairDraftForEbay = createServerFn({ method: "POST" })
     }
     if (!aiOut) aiOut = {};
     const title = cleanText(aiOut.title, titleSource).slice(0, 80) || fallbackOut.title;
-    const description = cleanText(aiOut.description, descriptionSource) || fallbackOut.description;
-    const bulletFeatures = (Array.isArray(aiOut.bullet_features) ? aiOut.bullet_features : fallbackOut.bullet_features)
+    // Audit #30: when AI Optimized already rewrote this description, Repair
+    // must NOT overwrite it — it repairs only the other fields (brand,
+    // specifics, images, variants) and leaves the description (and its
+    // bullets) alone. The flag lives in the draft's profit JSONB.
+    const descriptionOptimized = Boolean(draft.profit?.description_optimized_at);
+    const description = descriptionOptimized
+      ? cleanText(draft.description) || cleanText(descriptionSource)
+      : cleanText(aiOut.description, descriptionSource) || fallbackOut.description;
+    const bulletFeatures = (descriptionOptimized
+      ? (Array.isArray(draft.bullet_features) ? draft.bullet_features : fallbackOut.bullet_features)
+      : (Array.isArray(aiOut.bullet_features) ? aiOut.bullet_features : fallbackOut.bullet_features))
       .map((b: unknown) => shortAspect("Features", b))
       .filter(Boolean)
       .slice(0, 8);
@@ -268,7 +294,16 @@ export const repairDraftForEbay = createServerFn({ method: "POST" })
       profit: { ...(draft.profit || {}), start_country: (draft.profit?.start_country || (cjDetail as any)?.countryCode || (cjDetail as any)?.countryFrom || "CN").toString().toUpperCase().slice(0, 2), product_key: cjDetail?.productKeyEn || draft.profit?.product_key || null, variant_axes: axes, variant_group: variants.length > 1 ? { variants } : draft.profit?.variant_group || null, cj_refresh_cached_at: cjDetail ? new Date().toISOString() : draft.profit?.cj_refresh_cached_at || null },
     };
 
+    // Summary for the toast: what was actually repaired, and whether the
+    // optimized description was left in place.
+    const repaired: string[] = [];
+    if (title !== draft.title) repaired.push("title");
+    repaired.push("item specifics");
+    if (baseImages.length) repaired.push("images");
+    if (variants.length > 1) repaired.push("variants");
+    if (descriptionOptimized) repaired.push("left the optimized description in place");
+    const summary = `Repaired ${repaired.join(", ")}`;
     await context.supabase.from("listing_drafts").update(patch).eq("id", draft.id);
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `Repaired eBay draft data: ${title}`, metadata: { draftId: draft.id, images: baseImages.length, variants: variants.length, axes } });
-    return patch;
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ai", message: `Repaired eBay draft data: ${title} — ${summary}`, metadata: { draftId: draft.id, images: baseImages.length, variants: variants.length, axes, descriptionOptimized } });
+    return { ...patch, summary };
   });

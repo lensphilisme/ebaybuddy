@@ -1,6 +1,9 @@
 import { pageHead } from "@/lib/page-head";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
+import { EmptyState } from "@/components/empty-state";
+import { CompletenessBadge } from "@/components/completeness-badge";
+import { completenessScore } from "@/lib/completeness";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
@@ -12,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { AlertCircle, ChevronDown, FileEdit, Loader2, MoreHorizontal, Rocket, Search, Sparkles, Trash2, Wrench } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -22,11 +26,31 @@ import { toast } from "sonner";
 import DOMPurify from "dompurify";
 import { roundMoney } from "@/lib/pricing";
 
-export const Route = createFileRoute("/_authenticated/drafts")({ head: () => pageHead("Listing drafts", "Edit and repair CJ-to-eBay listing drafts."), component: DraftsPage });
+export const Route = createFileRoute("/_authenticated/drafts")({ head: () => pageHead("Drafts", "Edit and repair CJ-to-eBay listing drafts."), component: DraftsPage });
 
 function truncate(value: unknown, max = 60) {
   const text = String(value ?? "").trim();
   return text.length > max ? `${text.slice(0, max).trim()}…` : text;
+}
+
+/** Strip HTML (and embedded <img> tags) to clean plain text — descriptions
+ * are edited as plain text; images live in the gallery, not the copy. */
+function stripHtmlToText(html: unknown): string {
+  const raw = String(html ?? "");
+  return raw
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<img[^>]*>/gi, " ")
+    .replace(/<\/(p|div|li|br|tr|h[1-6])>/gi, "\n")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n+/g, "\n\n")
+    .trim();
 }
 
 /**
@@ -36,11 +60,10 @@ function truncate(value: unknown, max = 60) {
 function CategoryInput({ draftId, value, onSave }: { draftId: string; value: string; onSave: (id: string, patch: any) => Promise<void> }) {
   const [local, setLocal] = useState(value);
   const [saving, setSaving] = useState(false);
-  // Stay in sync when the category changes elsewhere (e.g. "AI pick
-  // category" fills it in) instead of showing a stale value.
+  // Stay in sync when the category changes elsewhere (e.g. the category
+  // suggester fills it in) instead of showing a stale value.
   useEffect(() => { setLocal(value); }, [value]);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => { setLocal(value); }, [value]);
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
   function change(v: string) {
     setLocal(v);
@@ -72,14 +95,27 @@ function profitText(draft: any) {
 }
 
 /** CJ descriptions are third-party HTML: render sanitized HTML, never the
- * raw markup as text (bug 8). Same DOMPurify pattern as the product page. */
+ * raw markup as text (bug 8). Same DOMPurify pattern as the product page.
+ * Long descriptions collapse with a "Show more / Show less" toggle. */
 function DraftDescription({ html }: { html: string }) {
+  const [expanded, setExpanded] = useState(false);
   const clean = useMemo(() => {
     if (!html || typeof window === "undefined") return "";
-    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+    // Images live in the gallery, not the description — strip <img> tags.
+    return DOMPurify.sanitize(html, { USE_PROFILES: { html: true }, FORBID_TAGS: ["img"] });
   }, [html]);
-  if (!html) return <div className="line-clamp-3 text-xs text-muted-foreground">No description yet.</div>;
-  return <div className="line-clamp-3 text-xs text-muted-foreground break-words [&_*]:max-w-full [&_img]:h-auto" dangerouslySetInnerHTML={{ __html: clean }} />;
+  const plainLen = useMemo(() => stripHtmlToText(html).length, [html]);
+  if (!html) return <div className="text-xs text-muted-foreground">No description yet.</div>;
+  return (
+    <div>
+      <div className={`${expanded ? "" : "line-clamp-3"} text-xs text-muted-foreground break-words [&_*]:max-w-full [&_img]:h-auto`} dangerouslySetInnerHTML={{ __html: clean }} />
+      {plainLen > 240 && (
+        <button type="button" className="mt-1 text-xs text-primary hover:underline" onClick={() => setExpanded((e) => !e)}>
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -87,6 +123,7 @@ function DraftDescription({ html }: { html: string }) {
  * score by token overlap with the draft title/description, drop
  * suggestions that share nothing with the product when better ones exist,
  * and dedupe identical-looking leaves so two buttons never look the same.
+ * The `source` ("AI" / "eBay") and `reason` pass through untouched.
  */
 function rankSuggestions(rows: any[], draft: any) {
   const hint = `${draft?.title || ""} ${draft?.description || ""} ${draft?.item_specifics?.Type || ""}`.toLowerCase();
@@ -112,14 +149,24 @@ function rankSuggestions(rows: any[], draft: any) {
     });
 }
 
+/** Why a push is blocked for one draft (null = pushable). Used by the
+ * toolbar button tooltip, the per-draft menu item and the dialog. */
+function pushBlockedReason(draft: any, livePushOn: boolean): string | null {
+  if (!livePushOn) return "Live push is off in Rules — turn it on to publish";
+  if (!draft.category_id) return "No eBay category — pick one first";
+  if (!(Number(draft.profit?.shipping) > 0)) return "No shipping quote — get a shipping quote first, the price needs real freight";
+  return null;
+}
+
 function DraftsPage() {
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [suggestions, setSuggestions] = useState<Record<string, any[]>>({});
   const [editDraft, setEditDraft] = useState<any | null>(null);
-  const [confirmRepair, setConfirmRepair] = useState(false);
   const [confirmDeleteIds, setConfirmDeleteIds] = useState<string[] | null>(null);
   // Push confirmation (bug 3): the ids awaiting the "goes LIVE" dialog.
   const [confirmPushIds, setConfirmPushIds] = useState<string[] | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
   const optimizeFn = useServerFn(optimizeDraftWithAi);
   const optimizeCopyFn = useServerFn(optimizeDraftCopyWithAi);
   const repairFn = useServerFn(repairDraftForEbay);
@@ -136,57 +183,102 @@ function DraftsPage() {
     },
   });
   const selectedIds = useMemo(() => Object.keys(selected).filter((id) => selected[id]), [selected]);
-  const failedIds = useMemo(() => drafts.filter((d: any) => d.status === "failed").map((d: any) => d.id), [drafts]);
-  // Live Push state (bug 4): read the same automation_rules row the Rules
-  // page uses. The server refuses to publish when this is off; the button
-  // mirrors that so the user is told before clicking, not after.
+  // Live Push + preflight state (bug 4): read the same automation_rules row
+  // the Rules page uses. The server refuses to publish when Live Push is
+  // off; the button mirrors that so the user is told before clicking.
   const { data: livePushRule } = useQuery({
     queryKey: ["automation-rules-live-push"],
     queryFn: async () => {
-      const { data } = await supabase.from("automation_rules").select("live_listing_enabled").maybeSingle();
+      const { data } = await supabase.from("automation_rules").select("live_listing_enabled,preflight_required").maybeSingle();
       return data || null;
     },
     staleTime: 60_000,
   });
   const livePushOn = livePushRule?.live_listing_enabled === true;
+  const preflightOn = livePushRule?.preflight_required === true;
   const confirmPushDrafts = useMemo(
     () => (confirmPushIds || []).map((id) => drafts.find((d: any) => d.id === id)).filter(Boolean),
     [confirmPushIds, drafts],
   );
-  // Push requires an eBay category per draft — the server marks category-less
-  // drafts failed, so block the button and say why instead of failing after.
-  const selectedMissingCategory = useMemo(
-    () => selectedIds.filter((id) => !drafts.find((d: any) => d.id === id)?.category_id),
-    [selectedIds, drafts],
-  );
+  const selectedDrafts = useMemo(() => selectedIds.map((id) => drafts.find((d: any) => d.id === id)).filter(Boolean), [selectedIds, drafts]);
+  // Push blockers for the selection (tooltips explain WHY the button is
+  // disabled — audit #32): no category, Live Push off, or no quote.
+  const pushBlocker = useMemo(() => {
+    if (!selectedDrafts.length) return null;
+    if (!livePushOn) return "Live push is off in Rules — turn it on to publish";
+    const noCat = selectedDrafts.filter((d: any) => !d.category_id).length;
+    if (noCat) return `${noCat} selected draft${noCat === 1 ? "" : "s"} need${noCat === 1 ? "s" : ""} an eBay category ID`;
+    const noQuote = selectedDrafts.filter((d: any) => !(Number(d.profit?.shipping) > 0)).length;
+    if (noQuote) return `${noQuote} selected draft${noQuote === 1 ? "" : "s"} have no shipping quote — get a quote first`;
+    return null;
+  }, [selectedDrafts, livePushOn]);
+  const filteredDrafts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return drafts.filter((d: any) => {
+      if (statusFilter !== "all" && d.status !== statusFilter) return false;
+      if (q && !`${d.title || ""} ${d.sku || ""}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [drafts, search, statusFilter]);
+  const statusOptions = useMemo(() => Array.from(new Set(drafts.map((d: any) => String(d.status || "pending")))), [drafts]);
 
   const optimize = useMutation({
-    mutationFn: async (ids: string[]) => { for (const id of ids) await optimizeFn({ data: { draftId: id } }); },
-    onSuccess: () => { toast.success("AI Fill completed item specifics"); refetch(); },
+    mutationFn: async (ids: string[]) => {
+      const filled: string[] = [];
+      for (const id of ids) {
+        const r: any = await optimizeFn({ data: { draftId: id } });
+        if (Array.isArray(r?.filledFields)) filled.push(...r.filledFields);
+      }
+      return Array.from(new Set(filled));
+    },
+    onSuccess: (filled) => { toast.success(filled.length ? `AI Fill completed — filled ${filled.join(", ")}` : "AI Fill completed — nothing new to fill"); refetch(); },
     onError: (e: Error) => toast.error(e.message),
   });
 
   const optimizeCopy = useMutation({
-    mutationFn: async (ids: string[]) => { for (const id of ids) await optimizeCopyFn({ data: { draftId: id } }); },
-    onSuccess: () => { toast.success("AI Optimized updated listing copy"); refetch(); },
+    mutationFn: async (ids: string[]) => {
+      let summary = "";
+      for (const id of ids) {
+        const r: any = await optimizeCopyFn({ data: { draftId: id } });
+        if (r?.summary) summary = r.summary;
+      }
+      return summary;
+    },
+    onSuccess: (summary) => { toast.success(`AI Optimized — ${summary || "updated listing copy"}`); refetch(); },
     onError: (e: Error) => toast.error(e.message),
   });
 
   const repair = useMutation({
-    mutationFn: async (ids: string[]) => { for (const id of ids) await repairFn({ data: { draftId: id } }); },
-    onSuccess: () => { toast.success("Draft data repaired for eBay"); refetch(); },
+    mutationFn: async (ids: string[]) => {
+      let summary = "";
+      for (const id of ids) {
+        const r: any = await repairFn({ data: { draftId: id } });
+        if (r?.summary) summary = r.summary;
+      }
+      return summary;
+    },
+    onSuccess: (summary) => { toast.success(summary || "Draft data repaired for eBay"); refetch(); },
     onError: (e: Error) => toast.error(e.message),
   });
 
-  const suggest = useMutation({
-    mutationFn: async (draft: any) => ({ id: draft.id, rows: await suggestFn({ data: { q: draft.title } }) }),
+  // ONE merged category suggester (audit #33/#34, removal B): the AI picks
+  // and eBay's own suggestions in a single list, each labelled with its
+  // source ("AI" / "eBay") and a rank. Clicking one applies it and
+  // dismisses the list.
+  const suggestCategory = useMutation({
+    mutationFn: async (draft: any) => {
+      const [aiPicks, ebayRows] = await Promise.all([
+        aiCatFn({ data: { title: draft.title, description: draft.description, hint: draft.category_id } }).catch(() => []),
+        suggestFn({ data: { q: draft.title } }).catch(() => []),
+      ]);
+      const aiIds = new Set((aiPicks || []).map((p: any) => String(p.categoryId)));
+      const merged = [
+        ...(aiPicks || []).map((p: any) => ({ categoryId: p.categoryId, path: p.path, source: "AI", reason: p.reason || "AI pick" })),
+        ...(ebayRows || []).filter((c: any) => !aiIds.has(String(c.categoryId))).map((c: any) => ({ categoryId: c.categoryId, path: c.path, source: "eBay", reason: "eBay suggestion" })),
+      ];
+      return { id: draft.id, rows: merged };
+    },
     onSuccess: ({ id, rows }) => setSuggestions((s) => ({ ...s, [id]: rows })),
-    onError: (e: Error) => toast.error(e.message),
-  });
-
-  const aiSuggest = useMutation({
-    mutationFn: async (draft: any) => ({ id: draft.id, rows: await aiCatFn({ data: { title: draft.title, description: draft.description, hint: draft.category_id } }) }),
-    onSuccess: ({ id, rows }: any) => { setSuggestions((s) => ({ ...s, [id]: rows })); toast.success("Best-fit eBay categories ready"); },
     onError: (e: Error) => toast.error(e.message),
   });
 
@@ -223,104 +315,130 @@ function DraftsPage() {
     if (error) toast.error(error.message); else refetch();
   }
 
+  /** Apply a suggestion: saves the category ID and the full path (stored
+   * in profit so the push dialog can show it) and dismisses the list. */
+  async function applyCategory(draft: any, c: { categoryId: string; path: string }) {
+    await updateDraft(draft.id, { category_id: c.categoryId, profit: { ...(draft.profit || {}), category_path: c.path } });
+    setSuggestions((s) => ({ ...s, [draft.id]: [] }));
+  }
+
   return (
     <AppShell title="Drafts" subtitle="Compact queue for fixing, editing and bulk-pushing to eBay">
-      <div className="mb-3 flex flex-wrap gap-2">
-        <Button asChild variant="outline" size="sm"><Link to="/products"><Search className="h-4 w-4 mr-1" />Research</Link></Button>
-        <Button size="sm" disabled={!selectedIds.length || optimize.isPending} onClick={() => optimize.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Fill</Button>
-        <Button size="sm" disabled={!selectedIds.length || optimizeCopy.isPending} variant="outline" onClick={() => optimizeCopy.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />AI Optimized</Button>
-        <Button size="sm" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)}><Wrench className="h-4 w-4 mr-1" />Repair</Button>
-        <Button size="sm" disabled={!failedIds.length || repair.isPending} variant="outline" onClick={() => setConfirmRepair(true)}><Wrench className="h-4 w-4 mr-1" />Repair failed</Button>
-        <Button size="sm" disabled={!selectedIds.length || push.isPending || selectedMissingCategory.length > 0 || !livePushOn} title={!livePushOn ? "Live push is off in Rules — turn it on to publish" : undefined} onClick={() => setConfirmPushIds(selectedIds)}><Rocket className="h-4 w-4 mr-1" />Push</Button>
-        <Button size="sm" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => setConfirmDeleteIds(selectedIds)}><Trash2 className="h-4 w-4 mr-1" />Delete</Button>
-      </div>
-      {!livePushOn && (
-        <p className="mb-3 text-xs text-amber-600">Live push is off in Rules — drafts can be prepared but nothing will be published. Turn on “Live Push to eBay” in Rules to enable Push.</p>
-      )}
-      {selectedMissingCategory.length > 0 && (
-        <p className="mb-3 text-xs text-amber-600">{`${selectedMissingCategory.length} selected draft${selectedMissingCategory.length === 1 ? "" : "s"} still need${selectedMissingCategory.length === 1 ? "s" : ""} an eBay category ID — expand the draft and use "AI pick category" or "eBay category suggest", then Push unlocks.`}</p>
-      )}
-
-      <Card className="overflow-hidden border shadow-sm">
-        {isLoading ? <div className="p-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : drafts.length === 0 ? (
-          <div className="p-12 text-center text-sm text-muted-foreground"><FileEdit className="h-8 w-8 mx-auto mb-2" />No drafts yet. Select products from CJ research and send them here.</div>
-        ) : (
-          <div className="divide-y">
-            {drafts.map((d: any) => {
-              const checked = !!selected[d.id];
-              const image = (Array.isArray(d.images) ? d.images[0] : undefined) || "";
-              return (
-                <Collapsible key={d.id}>
-                  <div className={`grid grid-cols-[42px_52px_1fr_auto] items-center gap-2 p-2 ${checked ? "bg-primary/5" : "bg-card"}`}>
-                    <button type="button" onClick={() => setSelected((s) => ({ ...s, [d.id]: !s[d.id] }))} className={`h-6 w-6 rounded-full border text-xs font-bold ${checked ? "bg-primary text-primary-foreground" : "bg-background"}`} aria-label={checked ? "Deselect draft" : "Select draft"}>{checked ? "✓" : ""}</button>
-                    <img src={image} alt={d.title || "Draft product"} className="h-12 w-12 rounded-md object-cover bg-muted" />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className="font-semibold text-sm line-clamp-2 leading-snug">{truncate(d.title)}</span>
-                        {d.status === "failed" ? <StatusErrorPopover draft={d} /> : <Badge variant="secondary" className="shrink-0 text-[10px]">{d.status}</Badge>}
-                      </div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                        <span>${Number(d.price || 0).toFixed(2)}</span>
-                        <span>{`${variantCount(d)} variant${variantCount(d) === 1 ? "" : "s"}`}</span>
-                        <span>{profitText(d)}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <CollapsibleTrigger asChild><Button size="icon" variant="ghost" aria-label="Show draft details"><ChevronDown className="h-4 w-4" /></Button></CollapsibleTrigger>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label="Draft actions"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                          <DropdownMenuItem onClick={() => setEditDraft(d)}>Edit draft</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => aiSuggest.mutate(d)}>AI pick category</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => suggest.mutate(d)}>eBay category suggest</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => optimize.mutate([d.id])}>AI Fill item specifics</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => optimizeCopy.mutate([d.id])}>AI Optimized copy</DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => repair.mutate([d.id])}>Repair for eBay</DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => { if (!d.category_id) { toast.error("Add an eBay category ID first — expand the draft and use AI pick category or eBay suggest."); return; } setConfirmPushIds([d.id]); }}>Push to eBay</DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive" onClick={() => setConfirmDeleteIds([d.id])}>Delete draft</DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                  </div>
-                  <CollapsibleContent>
-                    <div className="grid gap-3 border-t bg-muted/25 p-3 md:grid-cols-[1fr_280px]">
-                      <div className="min-w-0 space-y-2">
-                        <div className="text-sm font-medium break-words">{d.title}</div>
-                        <DraftDescription html={d.description || ""} />
-                      </div>
-                      <div className="space-y-2">
-                        <CategoryInput draftId={d.id} value={d.category_id || ""} onSave={updateDraft} />
-                        {rankSuggestions(suggestions[d.id], d).slice(0, 3).map((c: any) => {
-                          const parts = String(c.path).split(">").map((s: string) => s.trim()).filter(Boolean);
-                          return (
-                            <button key={c.categoryId} title={c.path} className="block w-full text-left text-xs text-primary hover:underline break-words whitespace-normal" onClick={() => updateDraft(d.id, { category_id: c.categoryId })}>
-                              {parts.length > 1 ? <span className="text-muted-foreground">{parts.slice(0, -1).join(" › ")} › </span> : null}<span className="font-semibold">{parts[parts.length - 1] || c.path}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </CollapsibleContent>
-                </Collapsible>
-              );
-            })}
-          </div>
+      <div className="space-y-6">
+        <div className="flex flex-wrap gap-2">
+          <Button asChild variant="outline" size="sm"><Link to="/products"><Search className="h-4 w-4 mr-1" />Research</Link></Button>
+          <Button size="sm" disabled={!selectedIds.length || optimize.isPending} onClick={() => optimize.mutate(selectedIds)}><Sparkles className="h-4 w-4 mr-1" />{optimize.isPending ? "Filling specifics…" : "AI Fill specifics"}</Button>
+          <Button size="sm" disabled={!selectedIds.length || repair.isPending} onClick={() => repair.mutate(selectedIds)}><Wrench className="h-4 w-4 mr-1" />{repair.isPending ? "Repairing…" : "Repair"}</Button>
+          <Button size="sm" disabled={!selectedIds.length || push.isPending || !!pushBlocker} title={pushBlocker || undefined} onClick={() => setConfirmPushIds(selectedIds)}><Rocket className="h-4 w-4 mr-1" />{push.isPending ? "Pushing…" : "Push"}</Button>
+          <Button size="sm" disabled={!selectedIds.length || bulkDelete.isPending} variant="destructive" onClick={() => setConfirmDeleteIds(selectedIds)}><Trash2 className="h-4 w-4 mr-1" />Delete</Button>
+        </div>
+        {!livePushOn && (
+          <p className="text-xs text-amber-600">Live push is off in Rules — drafts can be prepared but nothing will be published. Turn on “Live Push to eBay” in Rules to enable Push.</p>
         )}
-      </Card>
-      <AlertDialog open={confirmRepair} onOpenChange={setConfirmRepair}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{`Repair all ${failedIds.length} failed draft${failedIds.length === 1 ? "" : "s"}?`}</AlertDialogTitle>
-            <AlertDialogDescription>Each failed draft is re-checked against CJ and eBay and its title, description, images and item specifics are rebuilt. Drafts that repair cleanly return to pending so you can push them again.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => { setConfirmRepair(false); repair.mutate(failedIds); }}>{`Repair ${failedIds.length} draft${failedIds.length === 1 ? "" : "s"}`}</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        {pushBlocker && livePushOn && (
+          <p className="text-xs text-amber-600">{pushBlocker} — expand the draft and use "Suggest category", then Push unlocks.</p>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search drafts by title or SKU…" className="h-9 w-full sm:w-72" aria-label="Search drafts" />
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-36" aria-label="Filter by status"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All statuses</SelectItem>
+              {statusOptions.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <Card className="overflow-hidden shadow-[var(--shadow-card)]">
+          {isLoading ? <div className="p-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : drafts.length === 0 ? (
+            <div className="p-6"><EmptyState icon={FileEdit} title="No drafts yet" help="Select products from CJ research and send them here." actionLabel="Search CJ Products" actionTo="/products" /></div>
+          ) : filteredDrafts.length === 0 ? (
+            <div className="p-6"><EmptyState icon={FileEdit} title="No drafts match" help="Try a different search or status filter." /></div>
+          ) : (
+            <div className="divide-y">
+              {filteredDrafts.map((d: any) => {
+                const checked = !!selected[d.id];
+                const image = (Array.isArray(d.images) ? d.images[0] : undefined) || "";
+                const blocker = pushBlockedReason(d, livePushOn);
+                const completeness = completenessScore({ title: d.title, itemSpecifics: d.item_specifics, images: d.images, description: d.description });
+                const appliedPath = d.profit?.category_path || null;
+                return (
+                  <Collapsible key={d.id}>
+                    <div className={`relative grid grid-cols-[42px_52px_1fr_auto] items-center gap-2 p-2 ${checked ? "bg-primary/5" : "bg-card"}`}>
+                      <button type="button" onClick={() => setSelected((s) => ({ ...s, [d.id]: !s[d.id] }))} className={`h-6 w-6 rounded-full border text-xs font-bold ${checked ? "bg-primary text-primary-foreground" : "bg-background"}`} aria-label={checked ? "Clear selection" : "Select draft"}>{checked ? "✓" : ""}</button>
+                      <img src={image} alt={d.title || "Draft product"} className="h-12 w-12 rounded-md object-cover bg-muted" />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-semibold text-sm line-clamp-2 leading-snug">{truncate(d.title)}</span>
+                          {d.status === "failed" ? <StatusErrorPopover draft={d} /> : <Badge variant="secondary" className="shrink-0 text-[10px]">{d.status}</Badge>}
+                          <CompletenessBadge score={completeness.score} parts={completeness.parts} />
+                        </div>
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                          <span>${Number(d.price || 0).toFixed(2)}</span>
+                          <span>{`${variantCount(d)} variant${variantCount(d) === 1 ? "" : "s"}`}</span>
+                          <span>{profitText(d)}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <CollapsibleTrigger asChild><Button size="icon" variant="ghost" aria-label="Show draft details"><ChevronDown className="h-4 w-4" /></Button></CollapsibleTrigger>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild><Button size="icon" variant="ghost" aria-label="Draft actions"><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="z-50">
+                            <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                            <DropdownMenuItem onClick={() => setEditDraft(d)}>Edit draft</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => suggestCategory.mutate(d)}>Suggest category</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => optimize.mutate([d.id])}>AI Fill item specifics</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => optimizeCopy.mutate([d.id])}>AI Optimized copy</DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => repair.mutate([d.id])} title="Repairs this draft's title, description, images and item specifics from CJ data. Use it when a push failed or a draft is missing fields.">Repair for eBay</DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem disabled={!!blocker} title={blocker || undefined} onClick={() => setConfirmPushIds([d.id])}>Push to eBay</DropdownMenuItem>
+                            <DropdownMenuItem className="text-destructive" onClick={() => setConfirmDeleteIds([d.id])}>Delete draft</DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </div>
+                    <CollapsibleContent>
+                      <div className="relative z-0 grid gap-3 border-t bg-muted/25 p-3 md:grid-cols-[1fr_280px]">
+                        <div className="min-w-0 space-y-2">
+                          <div className="text-sm font-medium break-words">{d.title}</div>
+                          <DraftDescription html={d.description || ""} />
+                        </div>
+                        <div className="space-y-2">
+                          <CategoryInput draftId={d.id} value={d.category_id || ""} onSave={updateDraft} />
+                          {appliedPath && d.category_id ? (
+                            <div className="text-xs break-words">
+                              <span className="text-muted-foreground">Category: </span>{appliedPath} <span className="text-muted-foreground">({d.category_id})</span>{" "}
+                              <button type="button" className="text-primary hover:underline" onClick={() => { void updateDraft(d.id, { profit: { ...(d.profit || {}), category_path: null } }); suggestCategory.mutate(d); }}>Change</button>
+                            </div>
+                          ) : (
+                            <>
+                              <Button size="sm" variant="outline" disabled={suggestCategory.isPending} onClick={() => suggestCategory.mutate(d)}>
+                                {suggestCategory.isPending ? "Suggesting…" : "Suggest category"}
+                              </Button>
+                              {rankSuggestions(suggestions[d.id], d).slice(0, 3).map((c: any, i: number) => {
+                                // Full path with a space after each › (audit #34).
+                                const parts = String(c.path).split(">").map((s: string) => s.trim()).filter(Boolean);
+                                const displayPath = parts.join(" › ");
+                                return (
+                                  <button key={c.categoryId} title={`${displayPath} — ${c.source} suggestion #${i + 1}${c.reason ? ` · ${c.reason}` : ""}`} className="block w-full text-left text-xs text-primary hover:underline break-words whitespace-normal" onClick={() => void applyCategory(d, c)}>
+                                    <span className="font-semibold">{displayPath}</span>{" "}
+                                    <span className="text-muted-foreground">({c.categoryId}) · {c.source} #{i + 1}</span>
+                                  </button>
+                                );
+                              })}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </CollapsibleContent>
+                  </Collapsible>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+      </div>
       <AlertDialog open={confirmDeleteIds !== null} onOpenChange={(open) => !open && setConfirmDeleteIds(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -334,9 +452,11 @@ function DraftsPage() {
         </AlertDialogContent>
       </AlertDialog>
       {/* Push confirmation (bug 3): publishing goes LIVE on eBay — show
-          exactly what is about to publish and require an explicit Publish. */}
+          exactly what is about to publish and require an explicit Publish.
+          When "Require preflight approval" is ON in Rules, the full
+          preflight checklist is shown; when OFF, a compact confirm. */}
       <AlertDialog open={confirmPushIds !== null} onOpenChange={(open) => !open && setConfirmPushIds(null)}>
-        <AlertDialogContent>
+        <AlertDialogContent className="max-w-2xl">
           <AlertDialogHeader>
             <AlertDialogTitle>{`Publish ${confirmPushDrafts.length} draft${confirmPushDrafts.length === 1 ? "" : "s"} to eBay?`}</AlertDialogTitle>
             <AlertDialogDescription>
@@ -345,13 +465,44 @@ function DraftsPage() {
                 : "Live push is OFF in Rules, so publishing is blocked. Turn on “Live Push to eBay” in Rules, then come back to publish."}
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <div className="max-h-64 space-y-2 overflow-y-auto rounded-md border p-3">
-            {confirmPushDrafts.map((d: any) => (
-              <div key={d.id} className="flex items-start justify-between gap-3 text-sm">
-                <span className="min-w-0 break-words">{d.title}</span>
-                <span className="shrink-0 font-semibold tabular-nums">${Number(d.price || 0).toFixed(2)}</span>
-              </div>
-            ))}
+          <div className="max-h-80 space-y-3 overflow-y-auto rounded-md border p-3">
+            {confirmPushDrafts.map((d: any) => {
+              const profit = d.profit || {};
+              const fee = Number(profit.ebay_fee ?? 0);
+              const shipping = Number(profit.shipping ?? 0);
+              const checks = [
+                { label: "Category", ok: !!d.category_id, detail: d.category_id ? `${d.category_id}${profit.category_path ? ` · ${profit.category_path}` : ""}` : "missing" },
+                { label: "Brand", ok: !!((d.item_specifics?.Brand || d.brand) && String(d.item_specifics?.Brand || d.brand) !== ""), detail: String(d.item_specifics?.Brand || d.brand || "missing") },
+                { label: "Images", ok: Array.isArray(d.images) && d.images.length > 0, detail: `${Array.isArray(d.images) ? d.images.length : 0} image(s)` },
+                { label: "Price", ok: Number(d.price) > 0, detail: `$${Number(d.price || 0).toFixed(2)}` },
+                { label: "Fees", ok: fee > 0, detail: fee > 0 ? `$${fee.toFixed(2)}` : "not calculated" },
+                { label: "Shipping quoted", ok: shipping > 0, detail: shipping > 0 ? `${profit.carrier ? `${profit.carrier} · ` : ""}$${shipping.toFixed(2)}` : "no quote — push is blocked" },
+              ];
+              return (
+                <div key={d.id} className="space-y-1 text-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <span className="min-w-0 break-words font-medium">{d.title}</span>
+                    <span className="shrink-0 font-semibold tabular-nums">${Number(d.price || 0).toFixed(2)}</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {variantCount(d)} variant{variantCount(d) === 1 ? "" : "s"} · {profitText(d)}
+                  </div>
+                  {preflightOn ? (
+                    <ul className="space-y-0.5 text-xs">
+                      {checks.map((c) => (
+                        <li key={c.label} className={c.ok ? "text-foreground" : "text-destructive"}>
+                          {c.ok ? "✓" : "✗"} {c.label}: {c.detail}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="text-xs text-muted-foreground">
+                      Category {d.category_id || "missing"} · {variantCount(d)} variant{variantCount(d) === 1 ? "" : "s"} · Shipping {shipping > 0 ? `${profit.carrier ? `${profit.carrier} ` : ""}$${shipping.toFixed(2)}` : "not quoted"} · Fees {fee > 0 ? `$${fee.toFixed(2)}` : "—"} · Sell ${Number(d.price || 0).toFixed(2)}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -359,7 +510,7 @@ function DraftsPage() {
               disabled={!livePushOn || push.isPending}
               onClick={() => { if (confirmPushIds) push.mutate(confirmPushIds); setConfirmPushIds(null); }}
             >
-              {push.isPending ? "Publishing…" : "Publish"}
+              {push.isPending ? "Publishing…" : preflightOn ? "Confirm preflight & publish" : "Publish"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -371,13 +522,16 @@ function DraftsPage() {
 
 function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; onOpenChange: (open: boolean) => void; onSaved: () => void }) {
   const [form, setForm] = useState<any>({});
+  const [specificsRows, setSpecificsRows] = useState<{ key: string; value: string }[]>([]);
 
   useEffect(() => {
     if (!draft) return;
     setForm({
       id: draft.id,
       title: draft.title || "",
-      description: draft.description || "",
+      // Plain-text editor for the clean description (<img> stripped; the
+      // rendered HTML preview below shows what it looks like).
+      description: stripHtmlToText(draft.description || ""),
       // Money fields must display at 2 decimals — a raw DB float renders
       // as "15.989999771118164" otherwise (bug 11).
       price: draft.price != null ? Number(draft.price).toFixed(2) : "",
@@ -385,14 +539,20 @@ function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; 
       brand: draft.brand || "",
       model: draft.model || "",
       images: Array.isArray(draft.images) ? draft.images.join("\n") : "",
-      item_specifics: JSON.stringify(draft.item_specifics || {}, null, 2),
     });
+    const entries = Object.entries(draft.item_specifics || {}).map(([key, v]) => ({ key, value: Array.isArray(v) ? v.join(", ") : String(v ?? "") }));
+    setSpecificsRows(entries.length ? entries : [{ key: "Brand", value: draft.brand || "Unbranded" }]);
   }, [draft]);
 
   const save = useMutation({
     mutationFn: async () => {
-      let specifics = {};
-      try { specifics = JSON.parse(form.item_specifics || "{}"); } catch { throw new Error("Item specifics must be valid JSON"); }
+      const specifics: Record<string, string> = {};
+      for (const row of specificsRows) {
+        const k = row.key.trim();
+        const v = row.value.trim();
+        if (k && v) specifics[k] = v;
+      }
+      if (Object.keys(specifics).length === 0) throw new Error("Add at least one item specific (e.g. Brand).");
       const patch = {
         title: String(form.title || "").slice(0, 80),
         description: String(form.description || "").slice(0, 500000),
@@ -414,7 +574,9 @@ function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; 
 
   return (
     <Dialog open={!!draft} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] max-w-3xl overflow-y-auto">
+      {/* One close control only (audit #27e): the footer's Cancel. The X is
+          hidden, and nothing auto-focuses (or auto-selects) on open. */}
+      <DialogContent className="max-h-[92vh] max-w-3xl overflow-y-auto [&>button]:hidden" onOpenAutoFocus={(e) => e.preventDefault()}>
         <DialogHeader>
           <DialogTitle>Edit draft</DialogTitle>
           <DialogDescription>Adjust eBay-ready title, price, category, images and item specifics.</DialogDescription>
@@ -425,9 +587,26 @@ function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; 
           <label className="space-y-1"><span className="text-xs font-medium">eBay category ID</span><Input value={form.category_id || ""} onChange={(e) => setForm((f: any) => ({ ...f, category_id: e.target.value }))} /></label>
           <label className="space-y-1"><span className="text-xs font-medium">Brand</span><Input value={form.brand || ""} onChange={(e) => setForm((f: any) => ({ ...f, brand: e.target.value }))} /></label>
           <label className="space-y-1"><span className="text-xs font-medium">Model</span><Input value={form.model || ""} onChange={(e) => setForm((f: any) => ({ ...f, model: e.target.value }))} /></label>
-          <label className="space-y-1 md:col-span-2"><span className="text-xs font-medium">Description</span><Textarea rows={5} value={form.description || ""} onChange={(e) => setForm((f: any) => ({ ...f, description: e.target.value }))} /></label>
+          <div className="space-y-1 md:col-span-2">
+            <span className="text-xs font-medium">Description — rendered preview</span>
+            <div className="rounded-md border bg-muted/25 p-3 text-xs text-muted-foreground break-words [&_*]:max-w-full">
+              {draft?.description ? <div dangerouslySetInnerHTML={{ __html: typeof window === "undefined" ? "" : DOMPurify.sanitize(draft.description, { USE_PROFILES: { html: true }, FORBID_TAGS: ["img"] }) }} /> : "No description yet."}
+            </div>
+            <label className="block space-y-1 pt-2"><span className="text-xs font-medium">Description — plain text (edit this; images are not in the description)</span><Textarea rows={5} value={form.description || ""} onChange={(e) => setForm((f: any) => ({ ...f, description: e.target.value }))} /></label>
+          </div>
           <label className="space-y-1 md:col-span-2"><span className="text-xs font-medium">Image URLs, one per line</span><Textarea rows={4} value={form.images || ""} onChange={(e) => setForm((f: any) => ({ ...f, images: e.target.value }))} /></label>
-          <label className="space-y-1 md:col-span-2"><span className="text-xs font-medium">Item specifics JSON</span><Textarea rows={7} className="font-mono text-xs" value={form.item_specifics || ""} onChange={(e) => setForm((f: any) => ({ ...f, item_specifics: e.target.value }))} /></label>
+          <div className="space-y-2 md:col-span-2">
+            <span className="text-xs font-medium">Item specifics</span>
+            <p className="text-xs text-muted-foreground">Keys must match eBay aspect names for the category (e.g. Brand, Model, Type). Values are at most 65 characters. Empty rows are ignored.</p>
+            {specificsRows.map((row, i) => (
+              <div key={i} className="flex gap-2">
+                <Input value={row.key} placeholder="Name (e.g. Brand)" aria-label={`Specific name ${i + 1}`} onChange={(e) => setSpecificsRows((rows) => rows.map((r, j) => (j === i ? { ...r, key: e.target.value } : r)))} />
+                <Input value={row.value} placeholder="Value" maxLength={65} aria-label={`Specific value ${i + 1}`} onChange={(e) => setSpecificsRows((rows) => rows.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))} />
+                <Button type="button" variant="ghost" size="icon" aria-label={`Remove specific ${i + 1}`} onClick={() => setSpecificsRows((rows) => rows.filter((_, j) => j !== i))}>✕</Button>
+              </div>
+            ))}
+            <Button type="button" variant="outline" size="sm" onClick={() => setSpecificsRows((rows) => [...rows, { key: "", value: "" }])}>Add specific</Button>
+          </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
