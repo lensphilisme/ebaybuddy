@@ -2,6 +2,7 @@
 // Docs: https://developers.cjdropshipping.com/en/api/
 import { resolveUserCjToken } from "./cj-auth.server";
 import { parseMoney } from "./pricing";
+import { originCountryForVariant, type CjInventory } from "./cj-inventory";
 
 const CJ_BASE = "https://developers.cjdropshipping.com/api2.0/v1";
 
@@ -203,6 +204,29 @@ export async function cjGetCategories(token?: string): Promise<CjCategoryTree[]>
 
 export async function cjGetWarehouses(token?: string): Promise<CjWarehouse[]> {
   return cjFetch<CjWarehouse[]>("/product/globalWarehouseList", {}, token);
+}
+
+/**
+ * CJ "Query Inventory by Product ID" (GET /product/stock/getInventoryByPid):
+ * which warehouse countries hold stock for this product, per variant.
+ * The freight quote must start from one of those countries.
+ */
+export async function cjGetInventoryByPid(pid: string, token?: string): Promise<CjInventory> {
+  return cjFetch<CjInventory>(`/product/stock/getInventoryByPid?pid=${encodeURIComponent(pid)}`, {}, token);
+}
+
+/**
+ * The warehouse country a freight quote must start from for this variant.
+ * Never throws — a failed lookup falls back to CN (the old behaviour) so
+ * the quote itself still runs instead of failing on the inventory call.
+ */
+export async function cjOriginForVariant(pid: string, vid: string | undefined, destCountryCode: string, token?: string): Promise<string> {
+  try {
+    const inventory = await cjGetInventoryByPid(pid, token);
+    return originCountryForVariant(inventory, vid, destCountryCode);
+  } catch {
+    return "CN";
+  }
 }
 
 export async function cjProductDetail(pid: string, countryCode?: string, token?: string): Promise<CjProductDetail> {

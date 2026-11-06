@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getAiProviderStatus } from "@/lib/ai-provider.functions";
+import { moneyInputValue } from "@/lib/pricing";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -77,14 +78,15 @@ function RulesPage() {
     if (error) toast.error(error.message);
     else { toast.success("Rule saved"); refetch(); }
   }
-  const dirty = Boolean(rule && draft && NUMBER_FIELDS.some((k) => normalize(Number(draft[k]), FIELD_META[k].step) !== normalize(Number(rule[k] ?? defaultFor(k)), FIELD_META[k].step)));
+  const dirty = Boolean(rule && draft && NUMBER_FIELDS.some((k) => normalize(Number(draft[k]), FIELD_META[k].step) !== normalize(Number(rule[k] ?? defaultFor(k)), FIELD_META[k].step) || storedNeedsRewrite(rule[k], FIELD_META[k].step)));
   async function saveAll() {
     if (!rule || !draft || !dirty) return;
     setSavingAll(true);
     const patch: { [K in NumberFieldKey]?: number } = {};
     for (const k of NUMBER_FIELDS) {
       const v = normalize(Number(draft[k]), FIELD_META[k].step);
-      if (Number.isFinite(v) && v !== normalize(Number(rule[k] ?? defaultFor(k)), FIELD_META[k].step)) patch[k] = v;
+      const stored = normalize(Number(rule[k] ?? defaultFor(k)), FIELD_META[k].step);
+      if (Number.isFinite(v) && (v !== stored || storedNeedsRewrite(rule[k], FIELD_META[k].step))) patch[k] = v;
     }
     const { error } = await supabase.from("automation_rules").update(patch).eq("id", rule.id);
     setSavingAll(false);
@@ -185,11 +187,21 @@ function defaultFor(key: NumberFieldKey): number {
 }
 
 function formatValue(v: number, step: number) {
-  return step < 1 ? Number(v).toFixed(2) : String(v);
+  return step < 1 ? moneyInputValue(v) : String(v);
 }
 
 function normalize(v: number, step: number) {
   return step < 1 ? Math.round(v * 100) / 100 : v;
+}
+
+// A stored value carrying a float32 artifact (0.9900000095367432) reads
+// back different from its clean 2dp form — it needs a rewrite even when
+// the user changed nothing, or the artifact lives in the row forever.
+// (The column-type migration is the durable fix; this makes one Save-all
+// click clean the stored value in the meantime.)
+function storedNeedsRewrite(raw: unknown, step: number): boolean {
+  const n = Number(raw);
+  return Number.isFinite(n) && n !== normalize(n, step);
 }
 
 function Field({ label, value, onChange, step = 1, hint }: { label: string; value: string; onChange: (v: string) => void; step?: number; hint?: string }) {

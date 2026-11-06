@@ -1,6 +1,6 @@
 // @ts-nocheck -- run with `bun test`
 import { describe, expect, test } from "bun:test";
-import { parseMoney, roundMoney, roundToLadder, priceFromRules, floorBindsNote, roundingNote } from "./pricing";
+import { parseMoney, roundMoney, roundToLadder, priceFromRules, floorBindsNote, roundingNote, moneyInputValue } from "./pricing";
 import { sanitizeSku, extractEbayErrorText } from "./ebay/http";
 
 describe("parseMoney (bug 10: $NaN prices)", () => {
@@ -120,5 +120,23 @@ describe("extractEbayErrorText (task A: diagnosable error bodies)", () => {
   });
   test("empty body returns undefined", () => {
     expect(extractEbayErrorText("")).toBeUndefined();
+  });
+});
+
+describe("moneyInputValue + roundMoney (float32 artifacts at the form boundary)", () => {
+  test("a float32 draft price loads as a clean 2dp string", () => {
+    expect(moneyInputValue(21.989999771118164)).toBe("21.99");
+    expect(moneyInputValue(0.9900000095367432)).toBe("0.99");
+    expect(moneyInputValue(15.99)).toBe("15.99");
+  });
+  test("empty/missing prices load as an empty input", () => {
+    expect(moneyInputValue(null)).toBe("");
+    expect(moneyInputValue(undefined)).toBe("");
+    expect(moneyInputValue("")).toBe("");
+  });
+  test("the same artifact saves back as a clean 2dp number", () => {
+    expect(roundMoney(Number(moneyInputValue(21.989999771118164)))).toBe(21.99);
+    expect(roundMoney(0.9900000095367432)).toBe(0.99);
+    expect(roundMoney(21.989999771118164)).toBe(21.99);
   });
 });

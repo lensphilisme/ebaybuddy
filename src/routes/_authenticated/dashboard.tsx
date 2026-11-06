@@ -115,10 +115,14 @@ function DashboardPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  const AI_LABELS: Record<string, string> = { deepseek: "DeepSeek", gemini: "Gemini", openai: "OpenAI", custom: "Custom" };
   const missingIntegrations = [
     !status?.cj.connected && "CJ",
     !status?.ebay.connected && "eBay",
-    !status?.ai.connected && "AI",
+    // Name the provider when one is selected but no key is saved yet, so
+    // the card reads "AI (DeepSeek — no key)" instead of a bare "AI not
+    // connected" while DeepSeek is the selected provider.
+    !status?.ai.connected && (status?.ai.provider ? `AI (${AI_LABELS[String(status.ai.provider)] || "AI"} — no key)` : "AI"),
   ].filter(Boolean) as string[];
   const integrations = 3 - missingIntegrations.length;
 

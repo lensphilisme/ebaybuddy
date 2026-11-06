@@ -71,6 +71,29 @@ export function defaultModelFor(provider: AiProviderId): string {
   return AI_PROVIDERS[provider].defaultModel;
 }
 
+/**
+ * Row for a saved provider SELECTION (no key yet). is_active stays false
+ * so nothing treats it as a connected provider, and the credentials carry
+ * NO api_key — a selection must never overwrite a saved key. This is what
+ * lets the UI name the selected provider ("DeepSeek · no key saved")
+ * instead of claiming "Local only" while DeepSeek is selected.
+ */
+export function aiSelectionRow(userId: string, provider: AiProviderId, model: string) {
+  return {
+    user_id: userId,
+    provider: "ai",
+    label: "default",
+    environment: "production",
+    is_active: false,
+    credentials: {
+      auth_type: "api_key",
+      managed: true,
+      provider,
+      model: model || defaultModelFor(provider),
+    },
+  };
+}
+
 export class AiProviderError extends Error {
   constructor(message: string) {
     super(message);

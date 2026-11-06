@@ -26,7 +26,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import DOMPurify from "dompurify";
-import { roundMoney } from "@/lib/pricing";
+import { roundMoney, moneyInputValue } from "@/lib/pricing";
 
 export const Route = createFileRoute("/_authenticated/drafts")({ head: () => pageHead("Drafts", "Edit and repair CJ-to-eBay listing drafts."), component: DraftsPage });
 
@@ -545,8 +545,9 @@ function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; 
       // rendered HTML preview below shows what it looks like).
       description: stripHtmlToText(draft.description || ""),
       // Money fields must display at 2 decimals — a raw DB float renders
-      // as "15.989999771118164" otherwise (bug 11).
-      price: draft.price != null ? Number(draft.price).toFixed(2) : "",
+      // as "15.989999771118164" otherwise (bug 11). moneyInputValue is the
+      // shared load boundary; the save below writes roundMoney back.
+      price: moneyInputValue(draft.price),
       category_id: draft.category_id || "",
       brand: draft.brand || "",
       model: draft.model || "",

@@ -53,7 +53,7 @@ export const prepareMarketplaceListing = createServerFn({ method: "POST" })
     // From a CJ product: same builder + pricing as the eBay draft path
     // (see relistEndedListing in ebay.functions.ts for the pattern).
     const { data: rule } = await context.supabase.from("automation_rules").select("*").eq("user_id", context.userId).maybeSingle();
-    const { cjProductDetail, getUserCjToken, cjFreightCalculate } = await import("./cj.server");
+    const { cjProductDetail, getUserCjToken, cjFreightCalculate, cjOriginForVariant } = await import("./cj.server");
     const { buildCjDraftRow } = await import("./draft-from-cj");
     const cjToken = await getUserCjToken(context.supabase, context.userId);
     if (!cjToken) throw new Error("Add your CJ API key in Settings first.");
@@ -64,10 +64,12 @@ export const prepareMarketplaceListing = createServerFn({ method: "POST" })
     // Cheapest CJ freight for the primary variant (0 when CJ has no quote
     // — the prepared price then uses $0 shipping, same as an unquoted
     // draft; the toast shows the prepared price so the user can see it).
+    // The quote starts from the warehouse country holding this variant —
+    // a US-warehouse product quoted from CN returns an empty list.
     let shipping = 0;
     let carrier: { logisticName?: string; logisticAging?: string } | null = null;
     try {
-      const options = await cjFreightCalculate({ endCountryCode: "US", products: [{ vid: primaryVariant?.vid || "", quantity: 1 }] }, cjToken);
+      const options = await cjFreightCalculate({ startCountryCode: await cjOriginForVariant(data.cjProductId, primaryVariant?.vid, "US", cjToken), endCountryCode: "US", products: [{ vid: primaryVariant?.vid || "", quantity: 1 }] }, cjToken);
       const cheapest = (options || []).reduce((best: any, o: any) => (!best || Number(o.logisticPrice) < Number(best.logisticPrice) ? o : best), null);
       if (cheapest) {
         shipping = Number(cheapest.logisticPrice) || 0;

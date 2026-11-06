@@ -5,6 +5,7 @@ import {
   cjGetCategories,
   cjGetWarehouses,
   cjProductDetail,
+  cjGetInventoryByPid,
   cjFreightCalculate,
   getUserCjToken,
   isCjTokenError,
@@ -14,6 +15,7 @@ import {
   type CjCategoryTree,
   type CjWarehouse,
 } from "./cj.server";
+import type { CjInventory } from "./cj-inventory";
 
 async function tok(ctx: any): Promise<string> {
   const token = await getUserCjToken(ctx.supabase, ctx.userId);
@@ -60,6 +62,13 @@ export const getCjFreight = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { startCountryCode?: string; endCountryCode: string; products: { vid: string; quantity: number }[]; }) => data)
   .handler(async ({ data, context }: any): Promise<CjFreightOption[]> => withCjRetry(context, (token) => cjFreightCalculate(data, token)));
+
+/** Warehouse stock for a product (which countries hold it, per variant) —
+// the freight quote's origin. See src/lib/cj-inventory.ts. */
+export const getCjInventory = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .inputValidator((data: { pid: string }) => data)
+  .handler(async ({ data, context }: any): Promise<CjInventory> => withCjRetry(context, (token) => cjGetInventoryByPid(data.pid, token)));
 
 export const saveCjApiKey = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])

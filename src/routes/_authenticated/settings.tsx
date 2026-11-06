@@ -9,11 +9,11 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { connectEbayWithCode, getEbayConnectUrl, disconnectEbay, listEbayNotificationTopics, listEbayNotificationSubscriptions, createEbayNotificationSubscription } from "@/lib/ebay.functions";
 import { saveCjApiKey, getIntegrationStatus, disconnectCj } from "@/lib/cj.functions";
-import { saveAiProvider, removeAiProvider, getAiProviderStatus, testAiProvider } from "@/lib/ai-provider.functions";
+import { saveAiProvider, removeAiProvider, getAiProviderStatus, testAiProvider, saveAiProviderSelection } from "@/lib/ai-provider.functions";
 import { getSavedMarketplaceLocationLabel, saveMarketplaceLocationLabel, MARKETPLACE_LOCATION_DEFAULT_COORDS } from "@/lib/marketplace-location";
 import { supabase } from "@/integrations/supabase/client";
 import { KeyRound, Boxes, Tag, ExternalLink, Bell, Store } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
@@ -42,6 +42,7 @@ function SettingsPage() {
   const aiSaveFn = useServerFn(saveAiProvider);
   const aiRemoveFn = useServerFn(removeAiProvider);
   const aiStatusFn = useServerFn(getAiProviderStatus);
+  const aiSelectionFn = useServerFn(saveAiProviderSelection);
   const aiTestFn = useServerFn(testAiProvider);
   const topicsFn = useServerFn(listEbayNotificationTopics);
   const subsFn = useServerFn(listEbayNotificationSubscriptions);
@@ -113,6 +114,27 @@ function SettingsPage() {
     onSuccess: (r: { provider: string; model: string }) => { toast.success(`AI provider connected: ${r.provider} (${r.model})`); setAiKey(""); refetchAi(); },
     onError: (e: Error) => toast.error(e.message),
   });
+  // Persist the provider CHOICE (no key): the dropdown used to be local
+  // state only, so the "preselected DeepSeek" was just the hardcoded
+  // default and the status truthfully reported no provider. Silent — the
+  // key save is the real action; this just makes the badge honest.
+  const saveAiSelection = useMutation({
+    mutationFn: (v: { provider: string; model?: string }) => aiSelectionFn({ data: v }),
+    onSuccess: () => refetchAi(),
+    onError: (e: Error) => console.warn("[settings] could not save AI provider choice:", e.message),
+  });
+  // Sync the dropdown from the saved status once on load, so a provider
+  // picked earlier (or a key saved for one) is what the dropdown shows —
+  // not the hardcoded "deepseek" default.
+  const aiSelectionSynced = useRef(false);
+  useEffect(() => {
+    if (aiSelectionSynced.current || !aiStatus) return;
+    aiSelectionSynced.current = true;
+    if (aiStatus.provider) {
+      setAiProvider(String(aiStatus.provider));
+      setAiModel(String(aiStatus.model || ""));
+    }
+  }, [aiStatus]);
   const removeAi = useMutation({
     mutationFn: () => aiRemoveFn(),
     onSuccess: () => { toast.success("AI provider removed — listing AI now uses local rules"); setAiKeyTest(null); refetchAi(); },
@@ -213,8 +235,21 @@ function SettingsPage() {
             <p className="text-xs text-muted-foreground">
               API key: <span className="font-medium text-foreground">{aiKeyTest === "invalid" ? "Key invalid" : aiStatus?.connected ? "Key saved · tested OK" : "No key saved"}</span>
             </p>
+            {aiStatus?.provider && !aiStatus?.connected && (
+              <p className="text-xs text-amber-600">
+                {AI_LABELS[String(aiStatus.provider)] || "AI"} is selected but no key is saved — paste your key below to use it.
+              </p>
+            )}
             <div className="flex flex-col sm:flex-row gap-2">
-              <Select value={aiProvider} onValueChange={(v) => { setAiProvider(v); setAiModel(""); }}>
+              <Select value={aiProvider} onValueChange={(v) => {
+                setAiProvider(v);
+                setAiModel("");
+                // Persist the choice while no key is saved, so the status
+                // names the provider instead of falling back to "Local
+                // only". When a key IS saved the dropdown is for connecting
+                // a different provider — the choice is saved with the key.
+                if (!aiStatus?.connected) saveAiSelection.mutate({ provider: v, model: aiProviderMeta[v]?.defaultModel || "" });
+              }}>
                 <SelectTrigger aria-label="AI provider" className="w-full sm:w-56"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {Object.entries(aiProviderMeta).map(([id, meta]) => (

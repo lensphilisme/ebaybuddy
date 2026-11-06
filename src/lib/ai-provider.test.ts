@@ -5,6 +5,8 @@ import {
   callAiJson,
   callAiText,
   validateAiConfig,
+  getAiConfigStatus,
+  aiSelectionRow,
   AiProviderError,
 } from "./ai-provider.server";
 
@@ -100,5 +102,52 @@ describe("validateAiConfig", () => {
   });
   test("AiProviderError is an Error", () => {
     expect(new AiProviderError("x")).toBeInstanceOf(Error);
+  });
+});
+
+describe("getAiConfigStatus (three states)", () => {
+  // The status also falls back to env vars — keep the env key unset so the
+  // DB row is the only source in these tests.
+  const prevEnvKey = process.env.AI_API_KEY;
+  beforeEach(() => { delete process.env.AI_API_KEY; });
+  afterEach(() => { if (prevEnvKey !== undefined) process.env.AI_API_KEY = prevEnvKey; });
+
+  test("provider + key saved -> connected with provider, model and key tail", async () => {
+    const s = await getAiConfigStatus(userSupabase({ provider: "deepseek", model: "deepseek-v4-flash", api_key: "sk-test-1234" }), "u1");
+    expect(s.connected).toBe(true);
+    expect(s.provider).toBe("deepseek");
+    expect(s.model).toBe("deepseek-v4-flash");
+    expect(s.keyLast4).toBe("1234");
+    expect(s.source).toBe("user");
+  });
+
+  test("provider selected but NO key saved -> not connected, provider still named", async () => {
+    const s = await getAiConfigStatus(userSupabase({ provider: "deepseek", model: "deepseek-v4-flash" }), "u1");
+    expect(s.connected).toBe(false);
+    expect(s.provider).toBe("deepseek");
+    expect(s.model).toBe("deepseek-v4-flash");
+    expect(s.source).toBe("user");
+  });
+
+  test("no row at all -> not connected, no provider (Local only)", async () => {
+    const s = await getAiConfigStatus(userSupabase(null), "u1");
+    expect(s.connected).toBe(false);
+    expect(s.provider).toBeUndefined();
+    expect(s.source).toBeNull();
+  });
+});
+
+describe("aiSelectionRow (save provider choice without a key)", () => {
+  test("carries provider + model, no api_key, and is inactive", () => {
+    const row = aiSelectionRow("u1", "deepseek", "deepseek-v4-flash");
+    expect(row.provider).toBe("ai");
+    expect(row.label).toBe("default");
+    expect(row.is_active).toBe(false);
+    expect(row.credentials.provider).toBe("deepseek");
+    expect(row.credentials.model).toBe("deepseek-v4-flash");
+    expect("api_key" in row.credentials).toBe(false);
+  });
+  test("empty model falls back to the provider default", () => {
+    expect(aiSelectionRow("u1", "gemini", "").credentials.model).toBe("gemini-2.5-flash");
   });
 });

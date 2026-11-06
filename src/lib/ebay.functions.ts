@@ -7,6 +7,8 @@ import { EbayNotificationService } from "./ebay/notifications.server";
 import { EbayMarketingService, campaignInput } from "./ebay/marketing.server";
 import { requireLiveOptimizer, requireListingIdentity, hasFreshTraffic, priceDropFor, cjStockIsZero } from "./ebay/optimizer-policy";
 import { callAiJson, callAiText } from "./ai-provider.server";
+import { roundMoney } from "./pricing";
+import { insertSyncStart, finalizeSyncActivity } from "./ebay/sync-activity";
 
 function cleanTitle(value: unknown) {
   return String(value ?? "")
@@ -84,8 +86,8 @@ function repairVariants(detail: any, draft: any, images: string[]) {
       variantKey: compactText(v.variantKey || v.variantNameEn || v.variantSku || v.vid || `Option ${i + 1}`),
       variantNameEn: v.variantNameEn,
       variantImage: cleanImages(v.variantImage, v.image, images)[0] || images[0] || null,
-      variantSellPrice: Number(v.variantSellPrice ?? v.price ?? draft.price ?? 0),
-      price: Number(v.price ?? v.variantSellPrice ?? draft.price ?? 0),
+      variantSellPrice: roundMoney(Number(v.variantSellPrice ?? v.price ?? draft.price ?? 0)),
+      price: roundMoney(Number(v.price ?? v.variantSellPrice ?? draft.price ?? 0)),
       inventory: Number(v.inventory || v.quantity || draft.quantity || 1),
     })),
     axes: safeAxes,
@@ -199,19 +201,24 @@ export const syncEbayListings = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((data: { entriesPerPage?: number }) => data)
   .handler(async ({ data, context }: any) => {
+    // The sync takes ~4 minutes. Write a "started" row FIRST: if the user
+    // reloads mid-sync and the function is killed before the final row,
+    // the sync still leaves a trace instead of vanishing (sync #1 left no
+    // row at all). The inner function updates this row with the outcome.
+    const startRowId = await insertSyncStart(context.supabase, context.userId);
     // Sync failures used to vanish: the success row was the only one ever
     // written, so a failed sync appeared in the Dashboard and then
     // disappeared. Persist failures as error rows too (bug 7).
     try {
-      return await syncEbayListingsInner(data, context);
+      return await syncEbayListingsInner(data, context, startRowId);
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "error", category: "ebay", message: `eBay sync failed: ${message}`, metadata: { error: message } });
+      await finalizeSyncActivity(context.supabase, context.userId, startRowId, { level: "error", message: `eBay sync failed: ${message}`, metadata: { error: message } });
       throw e;
     }
   });
 
-async function syncEbayListingsInner(data: { entriesPerPage?: number }, context: any) {
+async function syncEbayListingsInner(data: { entriesPerPage?: number }, context: any, startRowId?: string | null) {
     const token = await getFreshEbayToken(context.supabase, context.userId);
     // Modern Inventory API: 100 offers per page. The Inventory API does not
     // expose quantitySold / watchCount, so sales/views are refreshed from
@@ -305,7 +312,9 @@ async function syncEbayListingsInner(data: { entriesPerPage?: number }, context:
       : null;
     const message = reason
       ?? `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)${totalSkipped ? `, ${totalSkipped} skipped (bad data)` : ""}${usedInventoryFallback ? " · via inventory list (offer list rejected by eBay)" : ""}`;
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level, category: "ebay", message, metadata: { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null, viaInventory: usedInventoryFallback } });
+    // One row per sync: update the "started" row written when the sync
+    // began (falls back to a fresh insert when there is no start row).
+    await finalizeSyncActivity(context.supabase, context.userId, startRowId, { level, message, metadata: { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null, viaInventory: usedInventoryFallback } });
     return { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null, level, reason };
   }
 
@@ -411,7 +420,7 @@ export const pushDraftsToEbay = createServerFn({ method: "POST" })
           workingDraft = await autoRepairDraftFromCj(context, workingDraft, firstMessage);
           pushed = await publishInventoryItem(token, workingDraft, { bestOffer: rule });
         }
-        await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: draft.sku, title: draft.title, price: draft.price, cj_product_id: draft.cj_product_id, status: "active", cj_landed_cost: Number((draft.profit || {}).item_cost || 0) + Number((draft.profit || {}).shipping || 0) });
+        await context.supabase.from("ebay_listings").insert({ user_id: context.userId, draft_id: draft.id, ebay_item_id: pushed.listingId, ebay_offer_id: pushed.offerId, sku: draft.sku, title: draft.title, price: roundMoney(Number(draft.price ?? 0)), cj_product_id: draft.cj_product_id, status: "active", cj_landed_cost: Number((draft.profit || {}).item_cost || 0) + Number((draft.profit || {}).shipping || 0) });
         // Auto-remove pushed draft from queue.
         await context.supabase.from("listing_drafts").delete().eq("id", draft.id);
         await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Pushed to eBay: ${draft.title}`, metadata: { draftId: draft.id, listingId: pushed.listingId, offerId: pushed.offerId } });
@@ -772,7 +781,7 @@ export const relistEndedListing = createServerFn({ method: "POST" })
   .inputValidator((data: { sku: string; title?: string; categoryId?: string }) => data)
   .handler(async ({ data, context }: any) => {
     const { data: rule } = await context.supabase.from("automation_rules").select("*").eq("user_id", context.userId).maybeSingle();
-    const { cjSearchProducts, cjProductDetail, getUserCjToken, cjFreightCalculate } = await import("./cj.server");
+    const { cjSearchProducts, cjProductDetail, getUserCjToken, cjFreightCalculate, cjOriginForVariant } = await import("./cj.server");
     const { buildCjDraftRow } = await import("./draft-from-cj");
     const cjToken = await getUserCjToken(context.supabase, context.userId);
     // Match the CJ product by its SKU. Prefer an exact productSku match;
@@ -786,11 +795,13 @@ export const relistEndedListing = createServerFn({ method: "POST" })
     const primaryVariant = detail?.variants?.[0] || detail?.variantList?.[0] || null;
     const itemCost = Number(primaryVariant?.variantSellPrice ?? detail?.sellPrice) || 0;
     // Freight quote for the primary variant (cheapest option; 0 when CJ
-    // has no quote — the push preflight blocks a 0-shipping push).
+    // has no quote — the push preflight blocks a 0-shipping push). The
+    // quote starts from the warehouse country holding this variant — a
+    // US-warehouse product quoted from CN returns an empty list.
     let shipping = 0;
     let carrier: { logisticName?: string; logisticAging?: string } | null = null;
     try {
-      const options = await cjFreightCalculate({ endCountryCode: "US", products: [{ vid: primaryVariant?.vid || "", quantity: 1 }] }, cjToken);
+      const options = await cjFreightCalculate({ startCountryCode: await cjOriginForVariant(product.pid, primaryVariant?.vid, "US", cjToken), endCountryCode: "US", products: [{ vid: primaryVariant?.vid || "", quantity: 1 }] }, cjToken);
       const cheapest = (options || []).reduce((best: any, o: any) => (!best || Number(o.logisticPrice) < Number(best.logisticPrice) ? o : best), null);
       if (cheapest) {
         shipping = Number(cheapest.logisticPrice) || 0;
@@ -819,7 +830,7 @@ export const relistEndedListing = createServerFn({ method: "POST" })
       cj_product_id: String(product.pid),
       sku: data.sku,
       title: draft.title,
-      price: draft.price,
+      price: roundMoney(Number(draft.price ?? 0)),
       profit: draft.profit,
       images: draft.images,
       description: draft.description,

@@ -59,7 +59,7 @@ function ListingsPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="active">Active</TabsTrigger>
-          <TabsTrigger value="ended">Ended</TabsTrigger>
+          <TabsTrigger value="ended">Ended / not live</TabsTrigger>
         </TabsList>
         <TabsContent value="active" className="mt-4">
           <Card className="overflow-hidden shadow-[var(--shadow-card)]">
@@ -92,8 +92,8 @@ function ListingsPage() {
         </TabsContent>
         <TabsContent value="ended" className="mt-4">
           <Card className="overflow-hidden shadow-[var(--shadow-card)]">
-            {endedLoading ? <div className="p-10"><Loader2 className="h-5 w-5 animate-spin mx-auto" /></div> : ended.length === 0 ? (
-              <div className="p-6"><EmptyState icon={RotateCcw} title="No ended listings found" help="Ended offers appear here once a listing is withdrawn. Relist creates a draft — it never publishes." /></div>
+            {endedLoading ? <div className="p-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /><p className="mt-3 text-sm text-muted-foreground">Checking your ended listings… this takes a few minutes — the app checks every item in your inventory.</p></div> : ended.length === 0 ? (
+              <div className="p-6"><EmptyState icon={RotateCcw} title="No ended listings found" help="eBay marks withdrawn listings as unpublished — this list also includes offers that were never published, because eBay doesn't distinguish the two. Relist creates a draft — it never publishes." /></div>
             ) : (
               <div className="overflow-x-auto">
                 <Table>

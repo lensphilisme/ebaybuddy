@@ -2,7 +2,7 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import { mapOfferToActiveListing, shippingFulfillmentPayload } from "./contracts";
 import { classifyNotification } from "./notifications.server";
-import { fetchPublishedOffersPage, fetchPublishedOffersViaInventory } from "./listings.server";
+import { fetchPublishedOffersPage, fetchPublishedOffersViaInventory, fetchEndedOffersViaInventory } from "./listings.server";
 import { __resetBreakers } from "./http";
 import offerPage from "./__fixtures__/offer-page.json";
 import inventoryItem from "./__fixtures__/inventory-item.json";
@@ -191,6 +191,75 @@ describe("sync resilience (task B3)", () => {
     };
     const page = await fetchPublishedOffersPage("test-token", 0, 100);
     expect(page.items[0].sku).toBe("badskuwithspaces");
+    globalThis.fetch = realFetch;
+  });
+});
+
+describe("ended offers (UNPUBLISHED, not ENDED)", () => {
+  test("a withdrawn (UNPUBLISHED) offer is surfaced; a PUBLISHED one is not", async () => {
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith("/inventory_item")) {
+        return Response.json({
+          total: 3,
+          inventoryItems: [
+            { sku: "ended-1", product: { title: "Ended Pet Bed", imageUrls: ["https://example.com/bed.jpg"] } },
+            { sku: "live-1", product: { title: "Live Toy" } },
+            { sku: "draft-1", product: { title: "Never Published Toy" } },
+          ],
+        });
+      }
+      if (u.pathname.endsWith("/offer")) {
+        const sku = u.searchParams.get("sku");
+        if (sku === "ended-1") {
+          return Response.json({
+            total: 2,
+            offers: [
+              // Withdrawn listing: UNPUBLISHED, still carries its listingId.
+              { offerId: "o-ended", sku: "ended-1", status: "UNPUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "999" }, pricingSummary: { price: { value: "12.99", currency: "USD" } } },
+              // The same SKU also has a live offer — it must NOT appear here.
+              { offerId: "o-live", sku: "ended-1", status: "PUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "1000" }, pricingSummary: { price: { value: "12.99", currency: "USD" } } },
+            ],
+          });
+        }
+        if (sku === "draft-1") {
+          return Response.json({
+            total: 1,
+            // Never published: UNPUBLISHED with no listingId — still surfaced.
+            offers: [{ offerId: "o-draft", sku: "draft-1", status: "UNPUBLISHED", marketplaceId: "EBAY_US", pricingSummary: { price: { value: "5.00", currency: "USD" } } }],
+          });
+        }
+        return Response.json({
+          total: 1,
+          offers: [{ offerId: "o-live-1", sku: "live-1", status: "PUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "1001" }, pricingSummary: { price: { value: "7.50", currency: "USD" } } }],
+        });
+      }
+      return Response.json(inventoryItem);
+    };
+    const page = await fetchEndedOffersViaInventory("test-token");
+    expect(page.total).toBe(3);
+    expect(page.items.map((i) => i.sku).sort()).toEqual(["draft-1", "ended-1"]);
+    expect(page.items.find((i) => i.sku === "ended-1")?.listingId).toBe("999");
+    expect(page.items.find((i) => i.sku === "ended-1")?.title).toBe("Ended Pet Bed");
+    expect(page.items.find((i) => i.sku === "draft-1")?.listingId).toBeNull();
+    globalThis.fetch = realFetch;
+  });
+
+  test("the old ENDED status value never matches anything", async () => {
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith("/inventory_item")) {
+        return Response.json({ total: 1, inventoryItems: [{ sku: "weird-1", product: { title: "Weird" } }] });
+      }
+      if (u.pathname.endsWith("/offer")) {
+        // eBay never returns this status; if it ever did, it is not an
+        // UNPUBLISHED offer and the Ended view must not claim it.
+        return Response.json({ total: 1, offers: [{ offerId: "o-weird", sku: "weird-1", status: "ENDED", marketplaceId: "EBAY_US", pricingSummary: { price: { value: "1.00", currency: "USD" } } }] });
+      }
+      return Response.json(inventoryItem);
+    };
+    const page = await fetchEndedOffersViaInventory("test-token");
+    expect(page.items.length).toBe(0);
     globalThis.fetch = realFetch;
   });
 });

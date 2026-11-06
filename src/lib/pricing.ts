@@ -72,6 +72,20 @@ export function roundMoney(value: number): number {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
 
+/**
+ * Value for a 2-decimal money input when LOADING a stored price. The DB
+ * can hand back float32 artifacts (21.989999771118164, 0.9900000095367432)
+ * — this is the load boundary that turns them into "21.99" / "0.99" so
+ * the artifact never sits in the input's value. Pair with roundMoney on
+ * save; the pair only keeps the STORED value clean once the column itself
+ * is NUMERIC (see supabase/migrations/20261106230000_money_numeric.sql).
+ */
+export function moneyInputValue(value: unknown): string {
+  if (value == null || value === "") return "";
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(2) : "";
+}
+
 /** Round up to the configured ladder (e.g. 0.99 -> $24.99 style). */
 export function roundToLadder(price: number, roundTo: number): number {
   // round_to comes from the DB as a float32 (0.9900000095367432) — snap it

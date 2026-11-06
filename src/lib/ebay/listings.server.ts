@@ -125,9 +125,9 @@ export type EndedOffer = {
   imageUrl?: string;
 };
 
-/** Join an ENDED offer to its inventory item. Unlike mapOfferToActiveListing,
- * an ended offer need not carry a listingId (the listing is withdrawn), so
- * this mapping does not require one. */
+/** Join an UNPUBLISHED offer to its inventory item. Unlike
+ * mapOfferToActiveListing, an unpublished offer need not carry a listingId
+ * (the listing is withdrawn), so this mapping does not require one. */
 export function mapOfferToEndedListing(offer: OfferRecord, item?: InventoryRecord | null): EndedOffer | null {
   const price = offer.pricingSummary?.price;
   return {
@@ -145,7 +145,12 @@ export function mapOfferToEndedListing(offer: OfferRecord, item?: InventoryRecor
 async function fetchOffersViaInventory<T>(
   accessToken: string,
   maxItems: number,
-  wantedStatus: "PUBLISHED" | "ENDED",
+  // eBay's Offer status is ONLY "PUBLISHED" or "UNPUBLISHED" (Inventory API
+  // spec) — there is no "ENDED" value. Withdrawing an offer moves it to
+  // UNPUBLISHED, and the API cannot distinguish a withdrawn listing from
+  // one that was never published, so the Ended view is "ended / not live"
+  // and lists both. Filtering on "ENDED" matched nothing, ever.
+  wantedStatus: "PUBLISHED" | "UNPUBLISHED",
   map: (offer: OfferRecord, item: InventoryRecord) => T | null,
 ): Promise<{ total: number; items: T[]; skipped: number }> {
   const client = new EbayRestClient(accessToken);
@@ -201,13 +206,15 @@ export async function fetchPublishedOffersViaInventory(
  * Ended offers, enumerated the same inventory-first way (the unfiltered
  * offer list rejects every page for this account — see above). Used only
  * by the Listings "Ended" view for relisting as drafts; never by the
- * main sync, whose behaviour is unchanged.
+ * main sync, whose behaviour is unchanged. Matches UNPUBLISHED offers:
+ * withdrawn listings land there, and so do offers that were never
+ * published — eBay does not distinguish the two.
  */
 export async function fetchEndedOffersViaInventory(
   accessToken: string,
   maxItems = 1000,
 ): Promise<{ total: number; items: EndedOffer[]; skipped: number }> {
-  return fetchOffersViaInventory(accessToken, maxItems, "ENDED", mapOfferToEndedListing);
+  return fetchOffersViaInventory(accessToken, maxItems, "UNPUBLISHED", mapOfferToEndedListing);
 }
 
 export async function fetchActiveEbayListings(

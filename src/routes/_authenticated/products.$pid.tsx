@@ -3,7 +3,8 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { getCjProduct, getCjFreight } from "@/lib/cj.functions";
+import { getCjProduct, getCjFreight, getCjInventory } from "@/lib/cj.functions";
+import { originCountryForVariant, requireFreightOptions } from "@/lib/cj-inventory";
 import { prepareMarketplaceListing } from "@/lib/marketplace.functions";
 import { getSavedMarketplaceLocationLabel } from "@/lib/marketplace-location";
 import { useEffect, useMemo, useState } from "react";
@@ -13,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from "@/components/ui/carousel";
+import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious, type CarouselApi } from "@/components/ui/carousel";
 import { ArrowLeft, Loader2, Truck, FileEdit, Store } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -49,6 +50,7 @@ function ProductDetailPage() {
   const { pid } = Route.useParams();
   const productFn = useServerFn(getCjProduct);
   const freightFn = useServerFn(getCjFreight);
+  const inventoryFn = useServerFn(getCjInventory);
   const prepareMarketplaceFn = useServerFn(prepareMarketplaceListing);
   const navigate = useNavigate();
 
@@ -56,6 +58,18 @@ function ProductDetailPage() {
     queryKey: ["cj-product", pid],
     queryFn: () => productFn({ data: { pid } }),
     staleTime: 5 * 60_000,
+  });
+
+  // Where the product is actually stocked (CJ inventory by product ID).
+  // The freight quote must start from the warehouse country holding this
+  // variant — quoting a US-warehouse product from CN returns an empty
+  // list. Non-blocking: a failed lookup falls back to CN, the old
+  // behaviour, so the quote still runs.
+  const { data: inventory } = useQuery({
+    queryKey: ["cj-inventory", pid],
+    queryFn: () => inventoryFn({ data: { pid } }),
+    staleTime: 5 * 60_000,
+    retry: false,
   });
 
   // The user's own pricing rules — the single source of fee/markup numbers.
@@ -93,6 +107,7 @@ function ProductDetailPage() {
 
   const [country, setCountry] = useState("US");
   const [variantId, setVariantId] = useState<string>("");
+  const [carouselApi, setCarouselApi] = useState<CarouselApi | undefined>();
   // Markup slider: null means "use the Rules page value" (default 35%).
   const [markupOverride, setMarkupOverride] = useState<number | null>(null);
   const markupPct = markupOverride ?? Number(rules?.markup_percent ?? PRICING_DEFAULTS.markup_percent);
@@ -100,12 +115,31 @@ function ProductDetailPage() {
   const activeVid = variantId || variants[0]?.vid || "";
   const activeVariant = variants.find((v) => v.vid === activeVid);
   const itemCost = parseMoney(activeVariant?.variantSellPrice ?? p?.sellPrice ?? 0);
+  // The main image follows the selected variant: when the variant changes,
+  // jump the carousel to that variant's image. The carousel otherwise
+  // stays on its current slide while the variant changes underneath it
+  // (Blue -> Pink kept showing blue). Compared through cleanImageList so
+  // the lookup matches the normalized URLs in `images`.
+  useEffect(() => {
+    if (!carouselApi || !activeVariant?.variantImage) return;
+    const variantImage = cleanImageList(activeVariant.variantImage)[0];
+    if (!variantImage) return;
+    const idx = images.indexOf(variantImage);
+    if (idx >= 0) carouselApi.scrollTo(idx, true);
+  }, [carouselApi, activeVid, images]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The warehouse country the quote starts from (from CJ stock for this
+  // variant; CN when the stock lookup is unavailable).
+  const originCountry = originCountryForVariant(inventory ?? null, activeVid, country);
 
   const freight = useMutation({
     mutationFn: async () => {
       const vid = activeVid;
       if (!vid) throw new Error("No variant available for freight quote");
-      const result = await freightFn({ data: { endCountryCode: country, products: [{ vid, quantity: 1 }] } });
+      const result = await freightFn({ data: { startCountryCode: originCountry, endCountryCode: country, products: [{ vid, quantity: 1 }] } });
+      // CJ returns an empty list (not an error) when no carrier serves the
+      // origin — surface it as an error instead of leaving the Quote button
+      // dead with no message and Send to Drafts disabled.
+      requireFreightOptions(result, originCountry);
       setQuotedVid(vid);
       return result;
     },
@@ -215,7 +249,7 @@ function ProductDetailPage() {
         <div className="grid lg:grid-cols-[minmax(0,0.95fr)_minmax(0,1.05fr)] gap-6 max-w-full overflow-hidden">
           {/* Image carousel */}
           <div className="min-w-0 max-w-full overflow-hidden">
-            <Carousel className="w-full max-w-full overflow-hidden">
+            <Carousel setApi={setCarouselApi} className="w-full max-w-full overflow-hidden">
               <CarouselContent>
                 {images.length === 0 ? (
                   <CarouselItem><div className="aspect-square bg-muted rounded-lg" /></CarouselItem>
@@ -273,6 +307,7 @@ function ProductDetailPage() {
 
             <Card className="p-4 space-y-3">
               <div className="flex items-center gap-2 text-sm font-medium"><Truck className="h-4 w-4" /> CJ Freight</div>
+              {inventory && <p className="text-xs text-muted-foreground">Shipping from the {originCountry} warehouse (from CJ stock for this variant).</p>}
               <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 items-end">
                 <div>
                   <Label className="text-xs text-muted-foreground">Ship to</Label>
@@ -284,7 +319,7 @@ function ProductDetailPage() {
                   </Select>
                 </div>
                 <Button onClick={() => freight.mutate()} disabled={freight.isPending || !activeVid}>
-                  {freight.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : "Quote"}
+                  {freight.isPending ? <><Loader2 className="h-4 w-4 animate-spin" /> Quoting…</> : "Quote"}
                 </Button>
               </div>
               {freight.error && <p className="text-xs text-destructive">{(freight.error as Error).message}</p>}
