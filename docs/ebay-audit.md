@@ -122,6 +122,17 @@ fields are preserved.
   Notification API needs it) and `sell.fulfillment` (write). Without them,
   notification subscriptions and returns/shipping-fulfillment calls 403.
   Accounts connected before Nov 6, 2026 must reconnect once.
+- CORRECTION (same day, after checking the live developer dashboard):
+  `sell.notification` is NOT the right scope for the Commerce Notification
+  API — eBay's own docs say the required scope is
+  `commerce.notification.subscription`, and requesting an invalid scope
+  makes eBay reject the whole OAuth consent with `invalid_scope`. The
+  consent list now requests `commerce.notification.subscription` instead.
+  Dashboard check also found the Production keyset ("AI automation") has
+  `sell.inventory.readonly` but NOT `sell.inventory` (write) — publishing,
+  revising and ending listings need the write scope, so it must be enabled
+  for the Production keyset in the developer dashboard before a live push
+  will work.
 - Fixed: `EbayReturnService` was a stub that threw. Returns now use the
   modern Post-Order API v2 (`GET /post-order/v2/return/search` and
   `GET /post-order/v2/return/{returnId}`), which is REST, not legacy. It

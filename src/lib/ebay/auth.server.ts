@@ -18,7 +18,10 @@ const SCOPES = [
   "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
   "https://api.ebay.com/oauth/api_scope/sell.marketing",
   "https://api.ebay.com/oauth/api_scope/sell.payment.dispute",
-  "https://api.ebay.com/oauth/api_scope/sell.notification",
+  // Commerce Notification API (topics/subscriptions) needs this exact
+  // scope — "sell.notification" is NOT a valid eBay scope and requesting
+  // it makes eBay reject the whole OAuth consent with invalid_scope.
+  "https://api.ebay.com/oauth/api_scope/commerce.notification.subscription",
   // Commerce Notification topic discovery uses the base application scope.
   // Topic-specific user grants are checked against the live topic catalog.
 ].join(" ");
