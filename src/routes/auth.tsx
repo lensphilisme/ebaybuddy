@@ -2,7 +2,6 @@ import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { z } from "zod";
 import { supabase } from "@/integrations/supabase/client";
-import { lovable } from "@/integrations/lovable";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -78,14 +77,18 @@ function AuthPage() {
   async function signInWithGoogle() {
     setLoading(true);
     try {
-      const result = await lovable.auth.signInWithOAuth("google", { redirect_uri: window.location.origin });
-      if (result.error) {
-        toast.error(result.error instanceof Error ? result.error.message : "Google sign-in failed");
+      // Direct Supabase Google OAuth (no Lovable). Google must be enabled as a
+      // provider in the Supabase dashboard for this project.
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: window.location.origin },
+      });
+      if (error) {
+        toast.error(error.message || "Google sign-in failed");
         setLoading(false);
         return;
       }
-      if (result.redirected) return;
-      navigate({ to: "/dashboard", replace: true });
+      // Supabase redirects to Google; the page navigates away from here.
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Google sign-in failed");
       setLoading(false);

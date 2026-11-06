@@ -2,7 +2,15 @@ import { createHash, createVerify } from "node:crypto";
 import { EbayRestClient } from "./rest.server";
 import { getEbayApplicationToken } from "./auth.server";
 
-export const notificationEndpoint = "https://ebaybuddy.lovable.app/api/public/ebay/notifications";
+// The public URL eBay calls for notifications. It must be the exact URL eBay
+// has on file, so it is derived from the incoming request at runtime — never
+// hardcoded to a host. (It used to point at the old Lovable-hosted URL.)
+export function notificationEndpointFromRequest(request: Request): string {
+  const url = new URL(request.url);
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
 
 export function challengeResponse(code: string, token: string, endpoint: string) {
   return createHash("sha256").update(code).update(token).update(endpoint).digest("hex");

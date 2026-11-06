@@ -101,10 +101,9 @@ function SettingsPage() {
 
         <IntegrationCard
           icon={KeyRound}
-          title="Lovable AI (built-in)"
-          desc="Powers title rewrites, item-specifics guessing and category suggestions. No key needed — included with your workspace."
-          status="Ready"
-          ready
+          title="Listing AI (local rules)"
+          desc="Title rewrites, item-specifics and category suggestions now use the built-in local rules. The old Lovable AI provider was removed — connect your own AI provider to restore smart suggestions."
+          status="Local only"
         />
       </div>
     </AppShell>

@@ -6,8 +6,8 @@ export const Route = createFileRoute("/api/public/ebay/notifications")({ server:
     if (!code || code.length > 500) return Response.json({ error: "Invalid challenge" }, { status: 400 });
     const token = process.env.EBAY_VERIFICATION_TOKEN;
     if (!token) return Response.json({ error: "Notifications are not configured" }, { status: 503 });
-    const { challengeResponse, notificationEndpoint } = await import("@/lib/ebay/notification-verification.server");
-    return Response.json({ challengeResponse: challengeResponse(code, token, notificationEndpoint) });
+    const { challengeResponse, notificationEndpointFromRequest } = await import("@/lib/ebay/notification-verification.server");
+    return Response.json({ challengeResponse: challengeResponse(code, token, notificationEndpointFromRequest(request)) });
   },
   POST: async ({ request }) => {
     const header = request.headers.get("x-ebay-signature");

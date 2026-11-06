@@ -1,7 +1,10 @@
+// NOTE: Lovable was removed from this project (Nov 2026). The AI features
+// that used to call Lovable's AI gateway now run on the local fallback
+// rules in this file (title/description/specifics derived from the draft
+// itself). To restore smart AI, plug in your own provider here.
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
 import { cjProductDetail, getUserCjToken } from "./cj.server";
-import { getFreshEbayToken, getItemAspectsForCategory } from "./ebay.server";
 
 function cleanText(value: unknown, fallback = "") {
   const normalize = (v: unknown) => String(v ?? "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/\s+/g, " ").trim();
@@ -96,21 +99,6 @@ function catalogForPrompt(catalog: Record<string, { required: boolean; allowed?:
   })).filter((spec) => !spec.applicableTo?.includes("PRODUCT") || spec.applicableTo.includes("ITEM")).slice(0, 120);
 }
 
-async function getAspectCatalog(context: any, draft: any) {
-  if (!draft.category_id) return {} as Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }>;
-  try {
-    const token = await getFreshEbayToken(context.supabase, context.userId);
-    return await getItemAspectsForCategory(token, String(draft.category_id), "EBAY_US");
-  } catch {
-    return {} as Record<string, { required: boolean; allowed?: string[]; maxLen?: number; applicableTo?: string[]; usage?: string; cardinality?: string }>;
-  }
-}
-
-function normalizeAiJson(json: any, fallbackValue: any) {
-  const content = json?.choices?.[0]?.message?.content;
-  if (!content) return fallbackValue;
-  try { return JSON.parse(content); } catch { return fallbackValue; }
-}
 
 function variantAxes(productKey?: unknown, sample?: any) {
   const configured = cleanText(productKey);
@@ -153,33 +141,8 @@ export const optimizeDraftWithAi = createServerFn({ method: "POST" })
   .handler(async ({ data, context }: any) => {
     const { data: draft, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).eq("id", data.draftId).single();
     if (error) throw error;
-    const aspectCatalog = await getAspectCatalog(context, draft);
-    let cjDetail: any = null;
-    try {
-      if (draft.cj_product_id) cjDetail = await cjProductDetail(draft.cj_product_id, draft.profit?.end_country || "US", await getUserCjToken(context.supabase, context.userId));
-    } catch { cjDetail = null; }
-    let out: any = { item_specifics: fallback(draft.title, draft.description).item_specifics, brand: draft.brand || "Unbranded", model: draft.model || "Does Not Apply" };
-    if (process.env.LOVABLE_API_KEY) {
-      try {
-        const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { "Lovable-API-Key": process.env.LOVABLE_API_KEY, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "openai/gpt-5.5",
-            response_format: { type: "json_object" },
-            messages: [
-              { role: "system", content: "You are eBay AI Fill. Return strict JSON with item_specifics, brand, and model only. Fill every applicable eBay item specific supported by the category to maximize search/filter visibility. Use category aspect names exactly when provided. Include required aspects and useful recommended aspects. Use arrays for multi-value fields like Features. Never include Item Location, Location, warehouse, ship-from, postal code, city, state, merchantLocationKey, or any listing/inventory location field in item_specifics. Do not write title or description." },
-              { role: "user", content: JSON.stringify({ title: draft.title, description: draft.description, category_id: draft.category_id, category_aspects: catalogForPrompt(aspectCatalog), existing_specifics: draft.item_specifics, brand: draft.brand, model: draft.model, sku: draft.sku, cj_product: cjDetail ? { name: cjDetail.productNameEn, categoryName: cjDetail.categoryName, productType: cjDetail.productType, productKeyEn: cjDetail.productKeyEn, productProEnSet: cjDetail.productProEnSet } : null }) },
-            ],
-          }),
-        });
-        const json = await res.json();
-        out = normalizeAiJson(json, out);
-      } catch {
-        out = { item_specifics: fallback(draft.title, draft.description).item_specifics, brand: draft.brand || "Unbranded", model: draft.model || "Does Not Apply" };
-      }
-    }
-    const specifics = sanitizeSpecifics({ Brand: out.brand || draft.brand || "Unbranded", ...(out.item_specifics || {}), Model: out.model || draft.model || "Does Not Apply" });
+    const out: any = { item_specifics: fallback(draft.title, draft.description).item_specifics, brand: draft.brand || "Unbranded", model: draft.model || "Does Not Apply" };
+        const specifics = sanitizeSpecifics({ Brand: out.brand || draft.brand || "Unbranded", ...(out.item_specifics || {}), Model: out.model || draft.model || "Does Not Apply" });
     const update = {
       item_specifics: specifics,
       brand: Array.isArray(specifics.Brand) ? specifics.Brand[0] : specifics.Brand,
@@ -196,26 +159,8 @@ export const optimizeDraftCopyWithAi = createServerFn({ method: "POST" })
   .handler(async ({ data, context }: any) => {
     const { data: draft, error } = await context.supabase.from("listing_drafts").select("*").eq("user_id", context.userId).eq("id", data.draftId).single();
     if (error) throw error;
-    let out = fallback(draft.title, draft.description);
-    if (process.env.LOVABLE_API_KEY) {
-      try {
-        const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { "Lovable-API-Key": process.env.LOVABLE_API_KEY, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "openai/gpt-5.5",
-            response_format: { type: "json_object" },
-            messages: [
-              { role: "system", content: "You are eBay AI Optimized. Return strict JSON with title, description, and bullet_features only. Optimize the eBay title to 80 characters or less, write buyer-focused SEO description copy, improve keywords and formatting. Do not generate item_specifics and do not generate item location." },
-              { role: "user", content: JSON.stringify({ title: draft.title, description: draft.description, bullet_features: draft.bullet_features, item_specifics: draft.item_specifics, sku: draft.sku }) },
-            ],
-          }),
-        });
-        const json = await res.json();
-        out = normalizeAiJson(json, out);
-      } catch { out = fallback(draft.title, draft.description); }
-    }
-    const update = {
+    const out = fallback(draft.title, draft.description);
+        const update = {
       title: cleanText(out.title, draft.title).slice(0, 80),
       description: cleanText(out.description, fallback(draft.title, draft.description).description),
       bullet_features: Array.isArray(out.bullet_features) ? out.bullet_features.map((b: unknown) => shortAspect("Features", b)).filter(Boolean).slice(0, 8) : [],
@@ -245,26 +190,8 @@ export const repairDraftForEbay = createServerFn({ method: "POST" })
     const axes = variantAxes(cjDetail?.productKeyEn || draft.profit?.product_key, (cjDetail?.variants || cjDetail?.variantList || cjDetail?.productVariants || draft.profit?.variant_group?.variants || [])[0]);
     const variants = variantRows(cjDetail, draft, baseImages);
 
-    let aiOut: any = {};
-    if (process.env.LOVABLE_API_KEY) {
-      try {
-        const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: { "Lovable-API-Key": process.env.LOVABLE_API_KEY, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "google/gemini-3-flash-preview",
-            response_format: { type: "json_object" },
-            messages: [
-              { role: "system", content: "Repair CJ Dropshipping product data for eBay Inventory API. Return strict JSON: title, description, bullet_features array, item_specifics object, brand, model. Rules: title <=80 chars, description plain text not empty, every item specific value <=65 chars, no duplicate variation axes in item_specifics, no unsupported brands/certifications/compatibility." },
-              { role: "user", content: JSON.stringify({ title: titleSource, description: descriptionSource, existing_specifics: draft.item_specifics, variation_axes: axes, category_id: draft.category_id, error: draft.audit_reason }) },
-            ],
-          }),
-        });
-        const json = await res.json();
-        aiOut = JSON.parse(json.choices?.[0]?.message?.content || "{}");
-      } catch { aiOut = {}; }
-    }
-
+    const aiOut: any = {}; // No AI provider configured; local fallback below fills everything.
+    
     const fallbackOut = fallback(titleSource, descriptionSource);
     const title = cleanText(aiOut.title, titleSource).slice(0, 80) || fallbackOut.title;
     const description = cleanText(aiOut.description, descriptionSource) || fallbackOut.description;
