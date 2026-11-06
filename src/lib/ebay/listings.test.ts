@@ -2,7 +2,7 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import { mapOfferToActiveListing, shippingFulfillmentPayload } from "./contracts";
 import { classifyNotification } from "./notifications.server";
-import { fetchPublishedOffersPage } from "./listings.server";
+import { fetchPublishedOffersPage, fetchPublishedOffersViaInventory } from "./listings.server";
 import { __resetBreakers } from "./http";
 import offerPage from "./__fixtures__/offer-page.json";
 import inventoryItem from "./__fixtures__/inventory-item.json";
@@ -111,6 +111,42 @@ describe("sync resilience (task B3)", () => {
     const page = await fetchPublishedOffersPage("test-token", 0, 100);
     expect(page.items.length).toBe(1);
     expect(page.items[0].itemId).toBe("111");
+    expect(page.skipped).toBe(1);
+    globalThis.fetch = realFetch;
+  });
+
+  test("inventory-first route recovers published offers when the offer list rejects every page", async () => {
+    const skuError = () =>
+      new Response(JSON.stringify({ errors: [{ errorId: 25707, message: "This is an invalid value for a SKU. Only alphanumeric characters can be used for SKUs, and their length must not exceed 50 characters" }] }), { status: 400, headers: { "content-type": "application/json" } });
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith("/inventory_item")) {
+        return Response.json({
+          total: 2,
+          inventoryItems: [
+            { sku: "good-1", product: { title: "Good Widget", imageUrls: ["https://example.com/good.jpg"] }, availability: { shipToLocationAvailability: { quantity: 3 } } },
+            { sku: "bad sku/with spaces", product: { title: "Bad Widget" } },
+          ],
+        });
+      }
+      if (u.pathname.endsWith("/offer")) {
+        const sku = u.searchParams.get("sku");
+        if (sku === "good-1") {
+          return Response.json({
+            total: 1,
+            offers: [{ offerId: "o-good", sku: "good-1", status: "PUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "555", listingStartDate: "2026-08-01T00:00:00.000Z" }, pricingSummary: { price: { value: "12.50", currency: "USD" } } }],
+          });
+        }
+        return skuError();
+      }
+      return Response.json(inventoryItem);
+    };
+    const page = await fetchPublishedOffersViaInventory("test-token");
+    expect(page.total).toBe(2);
+    expect(page.items.length).toBe(1);
+    expect(page.items[0].itemId).toBe("555");
+    expect(page.items[0].title).toBe("Good Widget");
+    expect(page.items[0].price).toBe(12.5);
     expect(page.skipped).toBe(1);
     globalThis.fetch = realFetch;
   });

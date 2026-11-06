@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-import { ebayConsentUrl, exchangeEbayCode, fetchPublishedOffersPage, getCategorySuggestions, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayListingRow } from "./ebay.server";
+import { ebayConsentUrl, exchangeEbayCode, fetchPublishedOffersPage, fetchPublishedOffersViaInventory, getCategorySuggestions, getFreshEbayToken, publishInventoryItem, reviseEbayListingText, endEbayListingRow } from "./ebay.server";
 import { EbayRestClient } from "./ebay/rest.server";
 import { EbayOrderService, EbayReturnService } from "./ebay/orders.server";
 import { EbayNotificationService } from "./ebay/notifications.server";
@@ -208,39 +208,57 @@ async function syncEbayListingsInner(data: { entriesPerPage?: number }, context:
     let totalSynced = 0;
     let totalSkipped = 0;
     let grandTotal = 0;
+    let retrievedAnyOfferData = false;
     const syncedItemIds: string[] = [];
+    const upsertItem = async (item: any) => {
+      const row = {
+        user_id: context.userId,
+        ebay_item_id: item.itemId,
+        ebay_offer_id: item.offerId,
+        sku: item.sku,
+        title: item.title,
+        price: item.price,
+        currency: item.currency,
+        marketplace_id: "EBAY_US",
+        image_url: item.imageUrl || undefined,
+        status: "active",
+        listed_at: item.listedAt || undefined,
+      };
+      const { data: existingRows } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).limit(10);
+      const existing = existingRows?.[0];
+      if (existing?.id) {
+        await context.supabase.from("ebay_listings").update(row).eq("id", existing.id);
+        const duplicateIds = (existingRows || []).slice(1).map((r: any) => r.id);
+        if (duplicateIds.length) await context.supabase.from("ebay_listings").delete().in("id", duplicateIds);
+      }
+      else await context.supabase.from("ebay_listings").insert(row);
+      if (item.itemId) syncedItemIds.push(item.itemId);
+    };
     while (true) {
       const result = await fetchPublishedOffersPage(token, offset, perPage);
       grandTotal = result.total;
       offset = result.nextOffset;
       totalSkipped += result.skipped || 0;
-      for (const item of result.items) {
-        const row = {
-          user_id: context.userId,
-          ebay_item_id: item.itemId,
-          ebay_offer_id: item.offerId,
-          sku: item.sku,
-          title: item.title,
-          price: item.price,
-          currency: item.currency,
-          marketplace_id: "EBAY_US",
-          image_url: item.imageUrl || undefined,
-          status: "active",
-          listed_at: item.listedAt || undefined,
-        };
-        const { data: existingRows } = await context.supabase.from("ebay_listings").select("id").eq("user_id", context.userId).eq("ebay_item_id", item.itemId).limit(10);
-        const existing = existingRows?.[0];
-        if (existing?.id) {
-          await context.supabase.from("ebay_listings").update(row).eq("id", existing.id);
-          const duplicateIds = (existingRows || []).slice(1).map((r: any) => r.id);
-          if (duplicateIds.length) await context.supabase.from("ebay_listings").delete().in("id", duplicateIds);
-        }
-        else await context.supabase.from("ebay_listings").insert(row);
-        if (item.itemId) syncedItemIds.push(item.itemId);
-      }
+      if (result.retrieved) retrievedAnyOfferData = true;
+      for (const item of result.items) await upsertItem(item);
       totalSynced += result.items.length;
       if (offset >= grandTotal) break;
       if (offset > 10000) break; // safety cap
+    }
+    // Fallback: eBay rejects EVERY page of the unfiltered offer list with
+    // error 25707 for this account (a SKU somewhere in the offer set that
+    // eBay will not serialize — never named, fails even for a one-item
+    // page). When the offer list returned no data at all, enumerate
+    // inventory items first and fetch each SKU's offer instead; a bad SKU
+    // then fails only its own lookup.
+    let usedInventoryFallback = false;
+    if (totalSynced === 0 && !retrievedAnyOfferData) {
+      const viaInventory = await fetchPublishedOffersViaInventory(token);
+      usedInventoryFallback = true;
+      grandTotal = viaInventory.total;
+      totalSkipped += viaInventory.skipped;
+      for (const item of viaInventory.items) await upsertItem(item);
+      totalSynced += viaInventory.items.length;
     }
     // Real traffic (views/clicks/sales, last 30 days) from the Analytics API.
     // Best-effort: a traffic failure must never fail the sync itself — the
@@ -252,7 +270,7 @@ async function syncEbayListingsInner(data: { entriesPerPage?: number }, context:
     } catch (e) {
       traffic = { updated: 0, total: syncedItemIds.length, error: e instanceof Error ? e.message : String(e) };
     }
-    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)${totalSkipped ? `, ${totalSkipped} skipped (bad data)` : ""}`, metadata: { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null } });
+    await context.supabase.from("activity_logs").insert({ user_id: context.userId, level: "success", category: "ebay", message: `Synced ${totalSynced} published eBay listings (${grandTotal} offers total, including unpublished)${totalSkipped ? `, ${totalSkipped} skipped (bad data)` : ""}${usedInventoryFallback ? " · via inventory list (offer list rejected by eBay)" : ""}`, metadata: { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null, viaInventory: usedInventoryFallback } });
     return { total: grandTotal, synced: totalSynced, skipped: totalSkipped, trafficUpdated: traffic.updated, trafficError: traffic.error || null };
   }
 

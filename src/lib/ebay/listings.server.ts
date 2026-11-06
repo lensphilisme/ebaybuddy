@@ -22,7 +22,7 @@ export async function fetchPublishedOffersPage(
   accessToken: string,
   offset = 0,
   limit = 100,
-): Promise<{ total: number; items: EbayActiveListing[]; nextOffset: number; skipped: number }> {
+): Promise<{ total: number; items: EbayActiveListing[]; nextOffset: number; skipped: number; retrieved: boolean }> {
   const client = new EbayRestClient(accessToken);
   const capped = Math.max(1, Math.min(limit, 100));
   // A page of offers can mix published and unpublished offers, so keep
@@ -31,6 +31,10 @@ export async function fetchPublishedOffersPage(
   let cursor = Math.max(0, offset);
   let total = 0;
   let skipped = 0;
+  // retrieved = at least one offer-list page actually returned data. When
+  // eBay rejects every page (error 25707, see below), retrieved stays
+  // false so the caller knows to try the inventory-item route instead.
+  let retrieved = false;
   const items: EbayActiveListing[] = [];
   // eBay validates SKUs when serving the offer list, so ONE existing offer
   // with an invalid SKU (spaces, slashes, >50 chars — e.g. created by
@@ -61,6 +65,7 @@ export async function fetchPublishedOffersPage(
       throw e;
     }
     total = page.total || 0;
+    retrieved = true;
     const offers = page.offers || [];
     if (!offers.length) break;
     for (const offer of offers) {
@@ -92,7 +97,65 @@ export async function fetchPublishedOffersPage(
   // In probing mode the bulk call never reported a total, so report the
   // number of offers actually encountered instead of a stale 0.
   if (probing) total = items.length + skipped;
-  return { total, items, nextOffset: cursor, skipped };
+  return { total, items, nextOffset: cursor, skipped, retrieved };
+}
+
+/**
+ * Inventory-item-first sync. The unfiltered offer list
+ * (GET /sell/inventory/v1/offer) rejects EVERY page with eBay error 25707
+ * ("invalid value for a SKU") for accounts whose offer set contains a SKU
+ * eBay will not serialize — the bad SKU is never named, and the failure
+ * happens even for a one-item page, so probing cannot isolate it. This
+ * route avoids that endpoint for enumeration entirely: it pages the
+ * inventory-item list (a different endpoint), then fetches each SKU's
+ * offer with the `sku` filter, which returns only that SKU's offers. A
+ * bad SKU fails only its own per-SKU fetch and is skipped, never the
+ * whole sync. Used as the fallback when the offer list returns no data.
+ */
+export async function fetchPublishedOffersViaInventory(
+  accessToken: string,
+  maxItems = 1000,
+): Promise<{ total: number; items: EbayActiveListing[]; skipped: number }> {
+  const client = new EbayRestClient(accessToken);
+  const items: EbayActiveListing[] = [];
+  let skipped = 0;
+  let seen = 0;
+  for (let offset = 0; offset < maxItems; offset += 100) {
+    const page = await client.json<{ total: number; inventoryItems: InventoryRecord[] }>(
+      `/sell/inventory/v1/inventory_item?limit=100&offset=${offset}`,
+    );
+    const records = page.inventoryItems || [];
+    if (!records.length) break;
+    seen += records.length;
+    for (const record of records) {
+      const sku = record.sku;
+      if (!sku) {
+        skipped += 1;
+        continue;
+      }
+      try {
+        const offers = await client.json<{ total: number; offers: OfferRecord[] }>(
+          `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&limit=100&offset=0`,
+        );
+        const published = (offers.offers || []).filter((o) => o.status === "PUBLISHED");
+        if (!published.length) {
+          skipped += 1;
+          continue;
+        }
+        for (const offer of published) {
+          const mapped = mapOfferToActiveListing(offer, record);
+          if (mapped) items.push(mapped);
+          else skipped += 1;
+        }
+      } catch (e) {
+        // One bad SKU (or a missing offer) must not kill the sync.
+        skipped += 1;
+        console.warn(`[ebay-sync] skipping inventory item ${sku}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (offset + records.length >= (page.total || 0)) break;
+  }
+  return { total: seen, items, skipped };
 }
 
 export async function fetchActiveEbayListings(
