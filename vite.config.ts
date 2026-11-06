@@ -1,10 +1,8 @@
 // Standard TanStack Start + Vite config. No Lovable packages remain:
 //   - tanstackStart: TanStack Start plugin (server entry is src/server.ts,
 //     our SSR error wrapper)
-//   - nitro: Nitro deployment adapter — preset "vercel" makes `vite build`
-//     emit Vercel Build Output API format under .vercel/output (this is
-//     what Vercel runs; without it the build only produces dist/ + .output
-//     and Vercel serves 404s). Other targets: change the preset here.
+//   - nitro: use Vercel's adapter only on Vercel; the preview and other
+//     builds keep TanStack Start's standard dist/ output.
 //   - viteReact: React Fast Refresh / JSX
 //   - tailwindcss: Tailwind v4
 //   - tsConfigPaths: the "@" path alias from tsconfig.json
@@ -24,7 +22,7 @@ export default defineConfig({
       // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
       server: { entry: "server" },
     }),
-    nitro({ preset: "vercel" }),
+    ...(process.env.VERCEL === "1" ? [nitro({ preset: "vercel" })] : []),
     viteReact(),
     tailwindcss(),
   ],

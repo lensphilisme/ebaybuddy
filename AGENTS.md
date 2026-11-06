@@ -8,3 +8,4 @@
 - Modern Orders and Marketing views call authenticated server functions; keep provider failures visible rather than displaying empty-success states.
 - Notification delivery uses Commerce Notification contracts and a signature-verified public receiver; discover topics from eBay instead of inventing subscription payloads or stock changes.
 - Scope public homepage layout rules to `.home-*` classes and use a viewport grid so screen-fit changes do not constrain authenticated pages.
+- Enable the Nitro Vercel adapter only when `VERCEL=1`; other builds must retain standard `dist/` output for the preview deployment.
