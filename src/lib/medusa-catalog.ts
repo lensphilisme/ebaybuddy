@@ -134,11 +134,11 @@ export function medusaVariantAvailability(variant: MedusaStoreVariant): "in_stoc
 /**
  * Map one Medusa product to a catalog row. Returns null (with the skip
  * reason) when the product cannot go in the catalog: no handle, not
- * published, or no variant with a usable USD price. Variants that all
- * share one price AND one availability collapse to a single "default"
- * entry — that is how the seed stores flat-price products (African wig,
- * sneaker: one feed row each), while differing prices or availability
- * stay one row per variant (slippers: 30 rows, 8 out of stock).
+ * published, or no variant with a usable USD price. Only a truly
+ * single-variant product collapses to one "default" entry; multiple
+ * variants always stay one row per variant (even when they share one
+ * price), so the feed's item_group_id can group them into ONE Shop
+ * product with a size/length/color picker.
  */
 export function mapMedusaProductToCatalogRow(product: MedusaStoreProduct): { row: CatalogSyncRow | null; skipReason: string | null } {
   const handle = String(product.handle || "").trim();
@@ -151,9 +151,14 @@ export function mapMedusaProductToCatalogRow(product: MedusaStoreProduct): { row
   if (priced.length === 0) return { row: null, skipReason: "no USD price" };
 
   let variants: FacebookCatalogVariant[];
-  const allSamePrice = priced.every((x) => x.price === priced[0].price);
-  const allSameAvailability = priced.every((x) => medusaVariantAvailability(x.variant) === medusaVariantAvailability(priced[0].variant));
-  if (priced.length === 1 || (allSamePrice && allSameAvailability)) {
+  // Only a truly single-variant product collapses to "default". Variants
+  // that share one price AND one availability used to collapse too, but
+  // that hides the picker: the African wig's 10 lengths and the
+  // slippers' 18 size/color combos all share one price, so they collapsed
+  // to one row and the customer could not pick a length/size/color. Now
+  // they stay as separate rows and the feed's item_group_id groups them
+  // into ONE Shop product with a picker.
+  if (priced.length === 1) {
     variants = [{ key: "default", label: "", price: priced[0].price, availability: medusaVariantAvailability(priced[0].variant) }];
   } else {
     const usedKeys = new Set<string>();

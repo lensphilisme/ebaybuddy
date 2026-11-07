@@ -137,7 +137,7 @@ function toFeedItems(rows: Map<string, any>): FacebookCatalogItem[] {
 }
 
 describe("mapMedusaProductToCatalogRow", () => {
-  test("flat-price multi-variant product collapses to one default row (African wig: 10 sizes, all $37.47)", () => {
+  test("flat-price multi-variant product keeps one row per variant (African wig: 10 lengths, all $37.47) — the feed groups them by item_group_id so the Shop shows one wig with a length picker", () => {
     const sizes = ["14", "16", "18", "20", "22", "24", "26", "28", "30", "32"];
     const p = product({
       handle: "african-women-wig-long-straight-hair-lace-hair-cover",
@@ -148,7 +148,9 @@ describe("mapMedusaProductToCatalogRow", () => {
     });
     const { row, skipReason } = mapMedusaProductToCatalogRow(p);
     expect(skipReason).toBeNull();
-    expect(row?.variants).toEqual([{ key: "default", label: "", price: 37.47, availability: "in_stock" }]);
+    expect(row?.variants).toEqual(
+      sizes.map((s) => ({ key: `${s}-inch`, label: `${s} inch`, price: 37.47, availability: "in_stock" })),
+    );
     expect(row?.link).toBe("https://app-base-jet.vercel.app/shop/african-women-wig-long-straight-hair-lace-hair-cover");
   });
 
@@ -281,7 +283,10 @@ describe("fetchMedusaProducts", () => {
     });
     const { row, skipReason } = mapMedusaProductToCatalogRow(realShape);
     expect(skipReason).toBeNull();
-    expect(row?.variants).toEqual([{ key: "default", label: "", price: 37.47, availability: "in_stock" }]);
+    expect(row?.variants).toEqual([
+      { key: "14-inch", label: "14 inch", price: 37.47, availability: "in_stock" },
+      { key: "16-inch", label: "16 inch", price: 37.47, availability: "in_stock" },
+    ]);
   });
 
   test("a 401 becomes a plain-language key error", async () => {

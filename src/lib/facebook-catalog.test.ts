@@ -152,6 +152,9 @@ describe("Facebook catalog CSV builder", () => {
     expect(variantSizeAndColor({ key: "12-inch", label: "12 inch", price: 1, availability: "in_stock" })).toEqual({ size: "12 inch", color: "" });
     expect(variantSizeAndColor({ key: "40to41-gray", label: "40to41 / Gray", price: 1, availability: "in_stock" })).toEqual({ size: "40to41", color: "Gray" });
     expect(variantSizeAndColor({ key: "brown", label: "brown", price: 1, availability: "in_stock" })).toEqual({ size: "", color: "brown" });
+    // Live Batana key is the full slug, not just "brown" — the last word still reads as color.
+    expect(variantSizeAndColor({ key: "batana-essential-oil-brown", label: "Batana Essential Oil Brown", price: 1, availability: "in_stock" })).toEqual({ size: "", color: "Batana Essential Oil Brown" });
+    expect(variantSizeAndColor({ key: "60ml", label: "Batana Essential Oil 60ml", price: 1, availability: "in_stock" })).toEqual({ size: "60ml", color: "" });
   });
 
   test("the 6 real products produce 50 feed rows (1 + 30 + 4 + 6 + 8 + 1)", () => {

@@ -141,7 +141,7 @@ const VARIANT_COLOR_WORDS = new Set([
   "green", "grey", "khaki", "natural", "pink", "red", "silver", "white",
 ]);
 
-/** Derive Facebook's `size` and `color` for one variant, so rows sharing an item_group_id show as one product with a picker. Rules: a "SIZE / COLOR" label splits (slippers: "40to41 / Gray"); a color-only key/label goes to color (Batana "brown"); otherwise the slug key, dashes → spaces, is the size (wigs "12 inch", Eelhoe "1pc", Batana "60ml"). The single "default" variant has neither. */
+/** Derive Facebook's `size` and `color` for one variant, so rows sharing an item_group_id show as one product with a picker. Rules: a "SIZE / COLOR" label splits (slippers: "40to41 / Gray"); a variant whose key/label ends in a color word goes to color (Batana "batana-essential-oil-brown" → color "brown"); otherwise the slug key, dashes → spaces, is the size (wigs "12 inch", Eelhoe "1pc", Batana "60ml"). The single "default" variant has neither. */
 export function variantSizeAndColor(v: FacebookCatalogVariant): { size: string; color: string } {
   const label = String(v.label || "").trim();
   const slash = label.indexOf(" / ");
@@ -150,7 +150,16 @@ export function variantSizeAndColor(v: FacebookCatalogVariant): { size: string; 
   }
   const key = String(v.key || "").trim().toLowerCase();
   if (!key || key === "default") return { size: "", color: "" };
-  if (VARIANT_COLOR_WORDS.has(key)) return { size: "", color: label || key };
+  // Color check on the LAST word of the key (and of the label), so a
+  // full-slug key like "batana-essential-oil-brown" still reads as color.
+  const lastKeyWord = key.split("-").filter(Boolean).pop() || "";
+  const lastLabelWord = label.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).pop() || "";
+  const colorWord = VARIANT_COLOR_WORDS.has(lastKeyWord)
+    ? lastKeyWord
+    : VARIANT_COLOR_WORDS.has(lastLabelWord)
+      ? lastLabelWord
+      : "";
+  if (colorWord) return { size: "", color: label || colorWord };
   return { size: key.replace(/-/g, " ").trim(), color: "" };
 }
 
