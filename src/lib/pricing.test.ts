@@ -1,6 +1,6 @@
 // @ts-nocheck -- run with `bun test`
 import { describe, expect, test } from "bun:test";
-import { parseMoney, roundMoney, roundToLadder, priceFromRules, floorBindsNote, roundingNote, moneyInputValue, loadedMoney } from "./pricing";
+import { parseMoney, roundMoney, roundToLadder, priceFromRules, floorBindsNote, roundingNote, moneyInputValue, loadedMoney, normalizeRuleMoney, shippingDisplayValue } from "./pricing";
 import { sanitizeSku, extractEbayErrorText } from "./ebay/http";
 
 describe("parseMoney (bug 10: $NaN prices)", () => {
@@ -157,5 +157,67 @@ describe("loadedMoney (round 2: the LOADED value, not just the display)", () => 
     const loaded = { ...row, price: loadedMoney(row.price) };
     expect(loaded.price).toBe(21.99);
     expect(moneyInputValue(loaded.price)).toBe("21.99");
+  });
+});
+
+describe("round 3: the Rules load chain (the gap round 2 missed)", () => {
+  test("a Rules row carrying float32 money values loads as clean 2dp numbers", () => {
+    // The live failure: Rules "Round to" DISPLAYED 0.99 while the
+    // underlying value was 0.9900000095367432. Round 2 applied loadedMoney
+    // at the drafts query but NOT at the automation_rules query — the
+    // `rule` state held the RAW fetched value. normalizeRuleMoney is the
+    // boundary that makes the state itself clean.
+    const raw = { id: "r1", min_profit_usd: 9.000000001, round_to: 0.9900000095367432, markup_pct: 35, live_push: true };
+    const loaded = normalizeRuleMoney(raw);
+    expect(loaded.round_to).toBe(0.99);
+    expect(loaded.min_profit_usd).toBe(9);
+    // The input's underlying value is the clean number, and its display
+    // is the clean 2dp string — assert BOTH, the way the live verifier
+    // reads the field.
+    expect(moneyInputValue(loaded.round_to)).toBe("0.99");
+    expect(moneyInputValue(loaded.min_profit_usd)).toBe("9.00");
+    // Non-money fields are untouched.
+    expect(loaded.markup_pct).toBe(35);
+    expect(loaded.live_push).toBe(true);
+    expect(loaded.id).toBe("r1");
+  });
+  test("a clean DB row passes through unchanged", () => {
+    const raw = { id: "r1", min_profit_usd: 9, round_to: 0.99, markup_pct: 35 };
+    const loaded = normalizeRuleMoney(raw);
+    expect(loaded.round_to).toBe(0.99);
+    expect(loaded.min_profit_usd).toBe(9);
+  });
+  test("normalizeRuleMoney tolerates a null row", () => {
+    expect(normalizeRuleMoney(null)).toBeNull();
+  });
+  test("the Edit-dialog load chain yields a clean underlying value, not just a clean display", () => {
+    // The full chain the Edit dialog runs: fetched value -> loadedMoney
+    // (drafts query boundary) -> moneyInputValue (form state). Assert the
+    // STATE number is 21.99, not merely that the screen shows "21.99".
+    const fetched = 21.989999771118164;
+    const stateValue = loadedMoney(fetched);
+    expect(stateValue).toBe(21.99);
+    expect(moneyInputValue(stateValue)).toBe("21.99");
+    // And the same chain from a clean NUMERIC column value.
+    expect(loadedMoney(21.99)).toBe(21.99);
+    expect(moneyInputValue(loadedMoney(21.99))).toBe("21.99");
+  });
+});
+
+describe("round 3: pre-quote shipping is never shown as $0.00", () => {
+  test("before any quote, shipping is 'not quoted yet' — never $0.00", () => {
+    expect(shippingDisplayValue(false, false, 0)).toBe("not quoted yet");
+    expect(shippingDisplayValue(false, false, 5.5)).toBe("not quoted yet");
+  });
+  test("a quote that came back with no priced option is 'price unavailable'", () => {
+    expect(shippingDisplayValue(false, true, 0)).toBe("price unavailable");
+  });
+  test("a real quote shows the real figure", () => {
+    expect(shippingDisplayValue(true, false, 5.5)).toBe("$5.50");
+    expect(shippingDisplayValue(true, false, 0.99)).toBe("$0.99");
+  });
+  test("a quoted $0 is a missing price, never free freight", () => {
+    expect(shippingDisplayValue(true, false, 0)).toBe("price unavailable");
+    expect(shippingDisplayValue(true, true, 0)).toBe("price unavailable");
   });
 });

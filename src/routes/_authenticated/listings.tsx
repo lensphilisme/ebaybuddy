@@ -108,11 +108,11 @@ function ListingsPage() {
                 <Table>
                   <TableHeader><TableRow><TableHead className="w-16" /><TableHead>Item</TableHead><TableHead className="hidden sm:table-cell">SKU</TableHead><TableHead>Price</TableHead><TableHead className="hidden md:table-cell">Category</TableHead><TableHead className="w-32" /></TableRow></TableHeader>
                   <TableBody>{ended.items.map((o: any) => (
-                    <TableRow key={o.offerId}>
+                    <TableRow key={o.listingId || o.sku}>
                       <TableCell><div className="h-12 w-12 rounded bg-muted overflow-hidden">{o.imageUrl ? <img src={o.imageUrl} alt={o.title} className="h-full w-full object-cover" loading="lazy" /> : null}</div></TableCell>
-                      <TableCell className="max-w-xs"><span className="font-medium line-clamp-2">{o.title}</span><div className="text-xs text-muted-foreground">{o.listingId ? `eBay item ${o.listingId}` : "no listing ID (withdrawn)"}</div></TableCell>
-                      <TableCell className="hidden sm:table-cell text-xs">{o.sku}</TableCell>
-                      <TableCell>${Number(o.price || 0).toFixed(2)}</TableCell>
+                      <TableCell className="max-w-xs"><span className="font-medium line-clamp-2">{o.title}</span><div className="text-xs text-muted-foreground">{o.listingId ? `eBay item ${o.listingId}` : "no listing ID (withdrawn)"}{o.variantCount > 1 ? ` · ${o.variantCount} variants` : ""}</div></TableCell>
+                      <TableCell className="hidden sm:table-cell text-xs">{o.sku}{o.variantCount > 1 ? ` +${o.variantCount - 1} more` : ""}</TableCell>
+                      <TableCell>{o.priceMin !== undefined && o.priceMax !== undefined && o.priceMin !== o.priceMax ? `$${Number(o.priceMin || 0).toFixed(2)} – $${Number(o.priceMax || 0).toFixed(2)}` : `$${Number(o.price || 0).toFixed(2)}`}</TableCell>
                       <TableCell className="hidden md:table-cell text-xs">{o.categoryId || "—"}</TableCell>
                       <TableCell>
                         <Button size="sm" variant="outline" disabled={relist.isPending} onClick={() => relist.mutate(o)} title="Rebuilds the draft from the CJ product with a fresh AI title and current pricing rules. Creates a draft only — never publishes.">

@@ -1,11 +1,11 @@
 import { pageHead } from "@/lib/page-head";
 import { createFileRoute } from "@tanstack/react-router";
 import { AppShell } from "@/components/app-shell";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getAiProviderStatus } from "@/lib/ai-provider.functions";
-import { moneyInputValue } from "@/lib/pricing";
+import { moneyInputValue, loadedMoney, normalizeRuleMoney } from "@/lib/pricing";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,19 +59,47 @@ function RulesPage() {
   const { data: aiStatus } = useQuery({ queryKey: ["ai-provider-status"], queryFn: () => aiStatusFn() });
   const { data: rule, refetch, isLoading, error } = useQuery({ queryKey: ["automation-rules"], enabled: !!user, queryFn: async () => {
     const { data } = await supabase.from("automation_rules").select("*").maybeSingle();
-    if (data) return data;
+    // Money load boundary (round 3 — the gap round 2 missed): the `rule`
+    // state holds the RAW fetched value, and the Rules form reads it. The
+    // DB columns are NUMERIC now, but a stale/cached fetch can still hand
+    // back a float32 artifact (0.9900000095367432), which then sits in
+    // state and in the input's underlying value. loadedMoney rounds it
+    // HERE, when the row enters client state, so the loaded value — not
+    // just the formatted display — is 0.99. Same treatment the drafts
+    // query got in round 2.
+    if (data) return normalizeRuleMoney(data);
     if (!user) throw new Error("Sign in first.");
     const { data: created, error } = await supabase.from("automation_rules").insert({ user_id: user.id }).select().single();
-    if (error) throw error; return created;
+    if (error) throw error; return normalizeRuleMoney(created);
   }});
   // Local draft of the numeric fields, so nine per-field Save buttons are
   // replaced by one "Save all" (audit #47). Switches save immediately.
   const [draft, setDraft] = useState<Record<NumberFieldKey, string> | null>(null);
   const [savingAll, setSavingAll] = useState(false);
+  // Last values synced from the rule row into the draft (round 3): the
+  // load effect used to run only when rule.id changed, so a refetch that
+  // returned different stored values — or a stale first load — never
+  // re-synced the draft, and a float32 artifact in state stayed in the
+  // input's underlying value. Now it re-runs whenever the row changes,
+  // but only overwrites fields the user has NOT edited since the last
+  // sync; an edited field keeps the user's value.
+  const lastSyncedRef = useRef<Record<NumberFieldKey, string> | null>(null);
   useEffect(() => {
     if (!rule) return;
-    setDraft(Object.fromEntries(NUMBER_FIELDS.map((k) => [k, formatValue(rule[k] ?? defaultFor(k), FIELD_META[k].step)])) as Record<NumberFieldKey, string>);
-  }, [rule?.id]);
+    const next = Object.fromEntries(NUMBER_FIELDS.map((k) => [k, formatValue(rule[k] ?? defaultFor(k), FIELD_META[k].step)])) as Record<NumberFieldKey, string>;
+    const prev = lastSyncedRef.current;
+    setDraft((d) => {
+      if (!d || !prev) return next;
+      const merged = { ...d };
+      for (const k of NUMBER_FIELDS) {
+        // Re-sync only fields the user has not touched since the last
+        // sync: the draft still equals what we last wrote from the rule.
+        if (normalize(Number(d[k]), FIELD_META[k].step) === normalize(Number(prev[k]), FIELD_META[k].step)) merged[k] = next[k];
+      }
+      return merged;
+    });
+    lastSyncedRef.current = next;
+  }, [rule]);
   async function save(patch: any) {
     if (!rule) return;
     const { error } = await supabase.from("automation_rules").update(patch).eq("id", rule.id);

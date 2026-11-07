@@ -2,7 +2,7 @@
 import { describe, expect, test, beforeEach } from "bun:test";
 import { mapOfferToActiveListing, shippingFulfillmentPayload } from "./contracts";
 import { classifyNotification } from "./notifications.server";
-import { fetchPublishedOffersPage, fetchPublishedOffersViaInventory, fetchEndedOffersViaInventory } from "./listings.server";
+import { fetchPublishedOffersPage, fetchPublishedOffersViaInventory, fetchEndedOffersViaInventory, groupEndedOffersByListing } from "./listings.server";
 import { __resetBreakers } from "./http";
 import offerPage from "./__fixtures__/offer-page.json";
 import inventoryItem from "./__fixtures__/inventory-item.json";
@@ -282,6 +282,79 @@ describe("ended offers (UNPUBLISHED, not ENDED)", () => {
     };
     const page = await fetchEndedOffersViaInventory("test-token");
     expect(page.items.length).toBe(0);
+    globalThis.fetch = realFetch;
+  });
+});
+
+describe("ended offers grouped by listing (round 3)", () => {
+  test("variant-offers sharing one listingId collapse to ONE ended listing", () => {
+    const offers = [
+      { offerId: "o-a", sku: "sku-a", title: "Pet Bed", price: 10, currency: "USD", categoryId: "1", listingId: "L1", imageUrl: "https://example.com/a.jpg" },
+      { offerId: "o-b", sku: "sku-b", title: "Pet Bed", price: 12, currency: "USD", categoryId: "1", listingId: "L1" },
+      { offerId: "o-c", sku: "sku-c", title: "Toy", price: 20, currency: "USD", categoryId: "2", listingId: "L2" },
+    ];
+    const grouped = groupEndedOffersByListing(offers as any);
+    // 3 variant-offers, 2 listings — the tab must count LISTINGS, not offers.
+    expect(grouped.length).toBe(2);
+    const l1 = grouped.find((g) => g.listingId === "L1")!;
+    expect(l1.variantCount).toBe(2);
+    expect(l1.skus).toEqual(["sku-a", "sku-b"]);
+    expect(l1.offerIds).toEqual(["o-a", "o-b"]);
+    expect(l1.price).toBe(10);
+    expect(l1.priceMin).toBe(10);
+    expect(l1.priceMax).toBe(12);
+    expect(l1.title).toBe("Pet Bed");
+    expect(l1.sku).toBe("sku-a");
+    const l2 = grouped.find((g) => g.listingId === "L2")!;
+    expect(l2.variantCount).toBe(1);
+    expect(l2.priceMin).toBe(20);
+    expect(l2.priceMax).toBe(20);
+  });
+
+  test("an offer without a listingId still forms its own row (keyed by SKU)", () => {
+    const grouped = groupEndedOffersByListing([
+      { offerId: "o-x", sku: "sku-x", title: "Lonely", price: 5, currency: "USD", categoryId: null, listingId: null },
+    ] as any);
+    expect(grouped.length).toBe(1);
+    expect(grouped[0].listingId).toBe("sku-x");
+    expect(grouped[0].variantCount).toBe(1);
+  });
+
+  test("fetchEndedOffersViaInventory returns one row per listing, not per variant-offer", async () => {
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith("/inventory_item")) {
+        return Response.json({
+          total: 3,
+          inventoryItems: [
+            { sku: "var-a", product: { title: "Multi-variant Bed", imageUrls: ["https://example.com/a.jpg"] } },
+            { sku: "var-b", product: { title: "Multi-variant Bed" } },
+            { sku: "solo-1", product: { title: "Solo Toy" } },
+          ],
+        });
+      }
+      if (u.pathname.endsWith("/offer")) {
+        const sku = u.searchParams.get("sku");
+        if (sku === "var-a") {
+          return Response.json({ total: 1, offers: [{ offerId: "o-a", sku: "var-a", status: "UNPUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "L1" }, pricingSummary: { price: { value: "10.00", currency: "USD" } } }] });
+        }
+        if (sku === "var-b") {
+          // Same listingId as var-a: a second variant of the same listing.
+          return Response.json({ total: 1, offers: [{ offerId: "o-b", sku: "var-b", status: "UNPUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "L1" }, pricingSummary: { price: { value: "12.00", currency: "USD" } } }] });
+        }
+        return Response.json({ total: 1, offers: [{ offerId: "o-solo", sku: "solo-1", status: "UNPUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "L2" }, pricingSummary: { price: { value: "20.00", currency: "USD" } } }] });
+      }
+      return Response.json(inventoryItem);
+    };
+    const page = await fetchEndedOffersViaInventory("test-token");
+    // 3 inventory items checked, but only 2 LISTINGS ended.
+    expect(page.total).toBe(3);
+    expect(page.items.length).toBe(2);
+    const l1 = page.items.find((i) => i.listingId === "L1")!;
+    expect(l1.variantCount).toBe(2);
+    expect(l1.priceMin).toBe(10);
+    expect(l1.priceMax).toBe(12);
+    expect(page.items.find((i) => i.listingId === "L2")?.variantCount).toBe(1);
     globalThis.fetch = realFetch;
   });
 });

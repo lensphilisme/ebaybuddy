@@ -19,7 +19,7 @@ import { ArrowLeft, Loader2, Truck, FileEdit, Store } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import DOMPurify from "dompurify";
-import { priceFromRules, parseMoney, roundMoney, floorBindsNote, roundingNote, PRICING_DEFAULTS } from "@/lib/pricing";
+import { priceFromRules, parseMoney, roundMoney, floorBindsNote, roundingNote, PRICING_DEFAULTS, shippingDisplayValue } from "@/lib/pricing";
 import { buildCjDraftRow, cleanImageList, variantAxes, variantOptionMap } from "@/lib/draft-from-cj";
 
 export const Route = createFileRoute("/_authenticated/products/$pid")({ head: () => pageHead("CJ product details", "Inspect CJ variants, images and live freight pricing."),
@@ -212,7 +212,7 @@ function ProductDetailPage() {
         detail: p,
         itemCost,
         shipping,
-        shippingNote: pricedOptions.length ? null : unpricedOnly ? "Shipping price unavailable — the quote came back without a price" : "No freight quote yet — price uses $0 shipping",
+        shippingNote: pricedOptions.length ? null : unpricedOnly ? "Shipping price unavailable — the quote came back without a price" : "No freight quote yet — shipping not quoted",
         carrier,
         rules: rules ?? null,
         markupPct,
@@ -358,7 +358,7 @@ function ProductDetailPage() {
               </div>
               <dl className="grid grid-cols-2 gap-y-1 text-sm">
                 <dt className="text-muted-foreground">Item cost</dt><dd className="text-right">${itemCost.toFixed(2)}</dd>
-                <dt className="text-muted-foreground">+ Shipping ({carrier?.logisticName ?? "—"})</dt><dd className="text-right">{unpricedOnly ? "price unavailable" : `$${shipping.toFixed(2)}`}</dd>
+                <dt className="text-muted-foreground">+ Shipping ({carrier?.logisticName ?? "—"})</dt><dd className="text-right">{shippingDisplayValue(hasQuote, unpricedOnly, shipping)}</dd>
                 {carrierResetNote && <dd className="col-span-2 text-xs text-amber-600">{carrierResetNote}</dd>}
                 <dt className="font-medium">Landed cost</dt><dd className="text-right font-medium">${landed.toFixed(2)}</dd>
                 <dt className="text-muted-foreground">{markupPct}% markup on landed cost</dt><dd className="text-right">${markupProfit.toFixed(2)}</dd>
@@ -369,7 +369,7 @@ function ProductDetailPage() {
                 <dt className="font-semibold">Profit</dt><dd className={`text-right font-semibold ${actualProfit >= 0 ? "text-success" : "text-destructive"}`}>${actualProfit.toFixed(2)}</dd>
                 {roundingGain > 0.005 && <dd className="col-span-2 text-xs text-muted-foreground">{roundingNote(roundingGain, finalSell, actualProfit)}</dd>}
               </dl>
-              {!hasQuote && <p className="text-xs text-amber-600">{unpricedOnly ? "Shipping price unavailable — the quote came back without a price, so the sell price above is not usable. Try a different variant or warehouse." : "Get a shipping quote first — the price needs real freight. The sell price above is an estimate with $0 shipping."}</p>}
+              {!hasQuote && <p className="text-xs text-amber-600">{unpricedOnly ? "Shipping price unavailable — the quote came back without a price, so the sell price above is not usable. Try a different variant or warehouse." : "Get a shipping quote first — the price needs real freight. The sell price above is an estimate — shipping not quoted yet."}</p>}
               <Button className="w-full" onClick={() => sendToDraft.mutate()} disabled={sendToDraft.isPending || !hasQuote} title={!hasQuote ? "Get a shipping quote first — the price needs real freight" : undefined}>
                 <FileEdit className="h-4 w-4 mr-1" /> {sendToDraft.isPending ? "Saving…" : "Send to Drafts"}
               </Button>

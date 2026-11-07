@@ -74,15 +74,16 @@ export function roundMoney(value: number): number {
 
 /**
  * Load-boundary normalizer for a money value coming back from the DB.
- * A row written before the money_numeric migration can still hand back
- * a float32 artifact (21.989999771118164). The DISPLAY was already
- * rounded (moneyInputValue), but the loaded VALUE in client state
- * carried the artifact into every other read. Apply this at the query
- * boundary — where the row enters client state — so the loaded value
+ * Apply this at EVERY query boundary that feeds a money input — the
+ * drafts list (round 2) AND the automation_rules row (round 3, which
+ * round 2 missed). The DB columns are NUMERIC now, so a fresh fetch
+ * returns clean 2dp values; but a stale/cached fetch can still hand back
+ * a float32 artifact (21.989999771118164), and the raw fetched value is
+ * what sits in component state and in the input's underlying value —
+ * formatting the display alone (moneyInputValue) cannot clean it. This
+ * rounds it HERE, when the row enters client state, so the LOADED value
  * is 21.99, not just the formatted text. The next save writes it back
- * clean (roundMoney on save). The Rules page keeps its raw row on
- * purpose: storedNeedsRewrite detects the artifact there and a single
- * Save-all click rewrites it.
+ * clean (roundMoney on save).
  */
 export function loadedMoney(value: unknown): number {
   return roundMoney(Number(value ?? 0));
@@ -100,6 +101,35 @@ export function moneyInputValue(value: unknown): string {
   if (value == null || value === "") return "";
   const n = Number(value);
   return Number.isFinite(n) ? n.toFixed(2) : "";
+}
+
+/**
+ * Money load boundary for an automation_rules row (round 3): the money
+ * fields (min_profit_usd, round_to) are the only ones whose raw fetched
+ * value can carry a float32 artifact (0.9900000095367432) into state and
+ * into the input's underlying value. Round them HERE, when the row enters
+ * client state, so `rule` itself is clean — formatValue only formats the
+ * display, it cannot clean the state the dirty-check and save read.
+ * The load chain (fetched value -> this -> moneyInputValue -> input
+ * string) must yield exactly "0.99" / "9.00".
+ */
+export function normalizeRuleMoney(row: any): any {
+  if (!row) return row;
+  return { ...row, min_profit_usd: loadedMoney(row.min_profit_usd), round_to: loadedMoney(row.round_to) };
+}
+
+/**
+ * What the product-detail "+ Shipping" line shows (round 3). Before any
+ * quote is run there is NO shipping figure — showing "$0.00" presents a
+ * missing price as free freight. So: no quote yet -> "not quoted yet";
+ * quote came back with no priced option -> "price unavailable"; quoted
+ * -> the real "$X.XX". Never "$0.00" for an unquoted item.
+ */
+export function shippingDisplayValue(hasQuote: boolean, unpricedOnly: boolean, shipping: number): string {
+  if (!hasQuote) return unpricedOnly ? "price unavailable" : "not quoted yet";
+  // A quoted $0 is a missing price, never free freight — never show $0.00.
+  if (!(Number(shipping) > 0)) return "price unavailable";
+  return `$${(Number(shipping) || 0).toFixed(2)}`;
 }
 
 /** Round up to the configured ladder (e.g. 0.99 -> $24.99 style). */

@@ -145,6 +145,69 @@ export function mapOfferToEndedListing(offer: OfferRecord, item?: InventoryRecor
   };
 }
 
+/**
+ * ONE row per eBay listing in the Ended view (round 3). The inventory
+ * enumeration returns one offer per VARIANT — a multi-variant listing is
+ * many inventory items / offers sharing one listingId — so counting offers
+ * showed 223 "ended listings" for 24 real listings. Group by listingId
+ * (fall back to the SKU when an offer somehow has none, so it still forms
+ * its own row) and collapse the variants into one row: the first variant
+ * supplies the representative title / SKU / price / image, and the row
+ * carries every variant SKU + offer ID so Relist can rebuild the draft.
+ * A listing with several ended variant-offers is ONE ended listing.
+ */
+export type EndedListing = {
+  listingId: string;
+  title: string;
+  /** Representative SKU (first variant) — Relist rebuilds the draft from
+   * CJ by this SKU, and buildCjDraftRow restores the full variant set. */
+  sku: string;
+  /** Every variant SKU in this listing. */
+  skus: string[];
+  offerIds: string[];
+  /** Representative price (first variant). */
+  price: number;
+  priceMin: number;
+  priceMax: number;
+  currency: string;
+  categoryId?: string | null;
+  imageUrl?: string;
+  variantCount: number;
+};
+
+export function groupEndedOffersByListing(offers: EndedOffer[]): EndedListing[] {
+  const groups = new Map<string, EndedListing>();
+  for (const o of offers) {
+    const key = o.listingId || o.sku;
+    const existing = groups.get(key);
+    if (!existing) {
+      groups.set(key, {
+        listingId: o.listingId || o.sku,
+        title: o.title,
+        sku: o.sku,
+        skus: [o.sku],
+        offerIds: [o.offerId],
+        price: o.price,
+        priceMin: o.price,
+        priceMax: o.price,
+        currency: o.currency,
+        categoryId: o.categoryId ?? null,
+        imageUrl: o.imageUrl,
+        variantCount: 1,
+      });
+      continue;
+    }
+    existing.skus.push(o.sku);
+    existing.offerIds.push(o.offerId);
+    existing.priceMin = Math.min(existing.priceMin, o.price);
+    existing.priceMax = Math.max(existing.priceMax, o.price);
+    if (!existing.categoryId && o.categoryId) existing.categoryId = o.categoryId;
+    if (!existing.imageUrl && o.imageUrl) existing.imageUrl = o.imageUrl;
+    existing.variantCount += 1;
+  }
+  return Array.from(groups.values());
+}
+
 async function fetchOffersViaInventory<T>(
   accessToken: string,
   maxItems: number,
@@ -227,11 +290,15 @@ export async function fetchPublishedOffersViaInventory(
  * variants that never went live), which is not "ended". Offers without a
  * listingId are counted as `neverPublished` and shown separately, never
  * as ended listings.
+ *
+ * The returned `items` are grouped by listing (one row per eBay listing,
+ * variants collapsed — see groupEndedOffersByListing), so the count
+ * matches Seller Hub's listing count instead of counting variant-offers.
  */
 export async function fetchEndedOffersViaInventory(
   accessToken: string,
   maxItems = 1000,
-): Promise<{ total: number; items: EndedOffer[]; skipped: number; neverPublished: number }> {
+): Promise<{ total: number; items: EndedListing[]; skipped: number; neverPublished: number }> {
   const { total, items, skipped, excluded } = await fetchOffersViaInventory(
     accessToken,
     maxItems,
@@ -239,7 +306,7 @@ export async function fetchEndedOffersViaInventory(
     mapOfferToEndedListing,
     (offer) => !!offer.listing?.listingId,
   );
-  return { total, items, skipped, neverPublished: excluded };
+  return { total, items: groupEndedOffersByListing(items), skipped, neverPublished: excluded };
 }
 
 export async function fetchActiveEbayListings(
