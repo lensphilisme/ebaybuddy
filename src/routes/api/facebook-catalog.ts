@@ -4,9 +4,9 @@ import { buildFacebookCatalogCsv, normalizeCatalogItem } from "@/lib/facebook-ca
 // Public Facebook catalog feed — NO auth on purpose: Facebook's
 // scheduled-feed fetcher has no login, so it must be able to read this
 // URL. It only ever serves the INCLUDED rows of
-// public.facebook_catalog_items (the 6 real Lisays Beauty products —
-// the 23 dummy store products are not in that table). It reads through
-// the service-role client server-side; the data served is public
+// public.facebook_catalog_items — new store products (dummies included)
+// arrive switched OFF via the auto-sync and are never served until a
+// human ticks them on. It reads through the service-role client server-side; the data served is public
 // product info (title, price, image, store link), the same as the
 // public storefront. Nothing here posts to Facebook — Commerce Manager
 // pulls this URL on a schedule the user sets there.

@@ -17,11 +17,35 @@
 //
 // The data is seeded from the Medusa storefront
 // (~/workspace/medusa-catalog/catalog.md) — only the 6 real products.
-// The 23 dummy store products must never appear here; the builder only
-// outputs what it is given, and the seed contains only real products.
+// The auto-sync adds new store products to the table switched OFF
+// (dummies included), but the builder below only ever outputs INCLUDED
+// rows, so a dummy product can never appear in the feed until a human
+// ticks it on.
 
 export const FACEBOOK_CATALOG_FEED_PATH = "/api/facebook-catalog";
 export const FACEBOOK_CATALOG_BRAND = "Lisays Beauty";
+
+/**
+ * The 6 handles seeded by supabase/migrations/20261106234500_facebook_catalog.sql.
+ * Anything in the table whose handle is NOT in this set arrived later via
+ * the Medusa auto-sync — so the page can badge it "New from store — not
+ * in feed" until the user ticks it on. (Sync inserts are always OFF, so
+ * a non-seeded handle that is still unchecked is by definition new and
+ * undecided; once the user ticks it on, the badge goes away with it.)
+ */
+export const SEEDED_CATALOG_HANDLES = new Set([
+  "african-women-wig-long-straight-hair-lace-hair-cover",
+  "cute-cartoon-cotton-slippers-thick-bottom-home-slippers-fashion-floor-bedroom-sl",
+  "eelhoe-ginger-hair-essential-oil-eelhoe-ginger-hair-essential-oil",
+  "batana-oil-hair-care-essential-oil-batana-oil-hair-oil",
+  "wigs-real-hair-india-hair-ladies-water-wave-hair-hair",
+  "women-shoes-female-casual-shoes",
+]);
+
+/** True when the product arrived via the Medusa auto-sync (not part of the original seed) and is still switched off. */
+export function isNewFromStore(item: { medusa_handle: string; included: boolean }): boolean {
+  return !item.included && !SEEDED_CATALOG_HANDLES.has(item.medusa_handle);
+}
 export const FACEBOOK_CATALOG_CSV_HEADERS = [
   "id",
   "title",
