@@ -72,6 +72,22 @@ export function defaultModelFor(provider: AiProviderId): string {
 }
 
 /**
+ * The app's DEFAULT provider selection (DeepSeek, cheapest). The Settings
+ * dropdown defaults to it, and it is the provider the status names when
+ * no selection row exists yet. A status must never claim "no provider"
+ * while the UI's own default is DeepSeek — the selection and the key are
+ * separate facts: the provider can be selected with no key saved (the
+ * key was lost when Supabase was recreated Nov 6, 2026), and every
+ * surface (Settings badge, Dashboard, Rules) must agree on that.
+ */
+export const DEFAULT_AI_PROVIDER: AiProviderId = "deepseek";
+
+/** Status for "no row, no env key": DeepSeek selected, no key saved. */
+export function defaultAiStatus(): { connected: false; provider: AiProviderId; model: string; source: "default" } {
+  return { connected: false, provider: DEFAULT_AI_PROVIDER, model: defaultModelFor(DEFAULT_AI_PROVIDER), source: "default" };
+}
+
+/**
  * Row for a saved provider SELECTION (no key yet). is_active stays false
  * so nothing treats it as a connected provider, and the credentials carry
  * NO api_key — a selection must never overwrite a saved key. This is what
@@ -145,7 +161,7 @@ export async function getUserAiConfig(supabase: any, userId: string): Promise<Ai
   });
 }
 
-export async function getAiConfigStatus(supabase: any, userId: string): Promise<{ connected: boolean; provider?: AiProviderId; model?: string; keyLast4?: string; source?: "user" | "env" | null }> {
+export async function getAiConfigStatus(supabase: any, userId: string): Promise<{ connected: boolean; provider?: AiProviderId; model?: string; keyLast4?: string; source?: "user" | "env" | "default" | null }> {
   const { data } = await supabase
     .from("integration_credentials")
     .select("credentials,is_active")
@@ -177,7 +193,13 @@ export async function getAiConfigStatus(supabase: any, userId: string): Promise<
   if (isAiProviderId(creds.provider)) {
     return { connected: false, provider: creds.provider, model: String(creds.model || ""), source: "user" };
   }
-  return { connected: false, source: null };
+  // No row at all (e.g. the key was lost when Supabase was recreated):
+  // the app still HAS a selection — its own default, DeepSeek — so the
+  // status derives it instead of reporting "none". The key being absent
+  // is a separate fact (connected: false); it must not erase the
+  // selection, or Settings, Dashboard and Rules all disagree with the
+  // dropdown, which defaults to DeepSeek.
+  return defaultAiStatus();
 }
 
 function friendlyProviderError(status: number, bodyText: string, provider: AiProviderId): string {

@@ -1,6 +1,6 @@
 // @ts-nocheck -- run with `bun test`
 import { describe, expect, test, afterEach } from "bun:test";
-import { originCountryForVariant, requireFreightOptions } from "./cj-inventory";
+import { originCountryForVariant, requireFreightOptions, pricedFreightOptions, cheapestPricedFreightOption, hasUnpricedFreightOnly, freightPrice } from "./cj-inventory";
 import { cjFreightCalculate } from "./cj.server";
 
 const originalFetch = globalThis.fetch;
@@ -87,5 +87,42 @@ describe("cjFreightCalculate (startCountryCode is sent to CJ)", () => {
     }) as any;
     await cjFreightCalculate({ endCountryCode: "US", products: [{ vid: "v1", quantity: 1 }] }, "test-token");
     expect(seenBody.startCountryCode).toBe("CN");
+  });
+});
+
+describe("priced freight options (a $0.00 option is a missing price, not free shipping)", () => {
+  // Live case: the Foldable Inflatable Home Swimming Pool quoted
+  // "DHL US to US #3 · 3-5d · $0.00" and the $0 flowed into the landed
+  // cost, inflating the shown profit. A $0 DHL shipment of a pool is
+  // not plausible free freight — CJ returns null/missing when it cannot
+  // price a carrier, and the old `?? 0` turned that into $0.00.
+  const dhlZero = { logisticName: "DHL US to US #3", logisticPrice: 0, logisticAging: "3-5" };
+  const dhlNull = { logisticName: "DHL Express", logisticPrice: null, logisticAging: "3-5" };
+  const packet = { logisticName: "CJPacket", logisticPrice: 5.5, logisticAging: "7-12" };
+  const ems = { logisticName: "EMS", logisticPrice: 12.0, logisticAging: "5-8" };
+
+  test("freightPrice turns a missing price into 0 (the signal, not a real price)", () => {
+    expect(freightPrice(dhlZero)).toBe(0);
+    expect(freightPrice(dhlNull)).toBe(0);
+    expect(freightPrice(packet)).toBe(5.5);
+    expect(freightPrice(null)).toBe(0);
+  });
+
+  test("priced options drop $0/null carriers and sort cheapest first", () => {
+    expect(pricedFreightOptions([dhlZero, ems, packet])).toEqual([packet, ems]);
+    expect(pricedFreightOptions([dhlZero, dhlNull])).toEqual([]);
+    expect(pricedFreightOptions(null)).toEqual([]);
+  });
+
+  test("cheapest priced option never picks a $0 carrier", () => {
+    expect(cheapestPricedFreightOption([dhlZero, ems, packet])?.logisticName).toBe("CJPacket");
+    expect(cheapestPricedFreightOption([dhlZero, dhlNull])).toBeNull();
+  });
+
+  test("hasUnpricedFreightOnly is true only when options exist but none has a price", () => {
+    expect(hasUnpricedFreightOnly([dhlZero, dhlNull])).toBe(true);
+    expect(hasUnpricedFreightOnly([dhlZero, packet])).toBe(false);
+    expect(hasUnpricedFreightOnly([])).toBe(false);
+    expect(hasUnpricedFreightOnly(null)).toBe(false);
   });
 });

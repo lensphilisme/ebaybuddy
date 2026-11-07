@@ -10,6 +10,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getIntegrationStatus } from "@/lib/cj.functions";
 import { syncEbayListings } from "@/lib/ebay.functions";
+import { lastSyncAt, formatRelativeTime } from "@/lib/ebay/sync-activity";
 import { supabase } from "@/integrations/supabase/client";
 import { FileEdit, Tag, KeyRound, TrendingUp, Loader2, Copy } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -103,6 +104,12 @@ function DashboardPage() {
     return true;
   }), [allLogs, logCategory, logLevel]);
 
+  // "Last sync" (round 2): the Dashboard must show the REAL last sync,
+  // taken from the latest sync row in this same activity log — not a
+  // stale or cached time. A sync at 5:45 PM reads "44 min ago" at
+  // 6:29 PM, never "5 hours ago".
+  const lastSync = useMemo(() => lastSyncAt(allLogs), [allLogs]);
+
   const sync = useMutation({
     mutationFn: () => syncFn({ data: { entriesPerPage: 200 } }),
     onSuccess: (r: any) => {
@@ -157,7 +164,12 @@ function DashboardPage() {
         <div className="grid gap-4 lg:grid-cols-3">
           <Card className="lg:col-span-2 shadow-[var(--shadow-card)]">
             <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0">
-              <CardTitle>Activity</CardTitle>
+              <div className="flex flex-wrap items-baseline gap-x-3">
+                <CardTitle>Activity</CardTitle>
+                <span className="text-xs text-muted-foreground" title={lastSync ? new Date(lastSync).toLocaleString() : undefined}>
+                  Last sync: {formatRelativeTime(lastSync)}
+                </span>
+              </div>
               <div className="flex flex-wrap gap-2">
                 <Select value={logCategory} onValueChange={setLogCategory}>
                   <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>

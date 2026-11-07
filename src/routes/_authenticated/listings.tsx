@@ -33,12 +33,12 @@ function ListingsPage() {
     if (error) throw error; return data || [];
   }});
   const rows = Array.from(new Map(data.map((l: any) => [l.ebay_item_id || l.id, l])).values());
-  const { data: ended = [], refetch: refetchEnded, isLoading: endedLoading } = useQuery({
+  const { data: ended = { items: [], neverPublished: 0, total: 0 }, refetch: refetchEnded, isLoading: endedLoading } = useQuery({
     queryKey: ["ebay-ended-offers"],
     enabled: tab === "ended",
     queryFn: async () => {
       const r: any = await endedFn();
-      return r.items || [];
+      return { items: r.items || [], neverPublished: r.neverPublished || 0, total: r.total || 0 };
     },
   });
   const sync = useMutation({ mutationFn: () => syncFn({ data: { entriesPerPage: 200 } }), onSuccess: (r: any) => {
@@ -54,8 +54,8 @@ function ListingsPage() {
   });
   return <AppShell title="Listings" subtitle="Your live eBay listings, synced from your connected account" actions={<SyncButton onSync={() => sync.mutateAsync()} />}>
     <div className="space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3"><div className="text-sm text-muted-foreground">{`${rows.length} listing${rows.length === 1 ? "" : "s"} stored`}</div></div>
-      <p className="text-xs text-muted-foreground">Sales and views are 30-day numbers from eBay Analytics — they refresh when you sync. "—" means traffic has never been fetched for that listing.</p>
+      <div className="flex items-center justify-between flex-wrap gap-3"><div className="text-sm text-muted-foreground">{`${rows.length} active listing${rows.length === 1 ? "" : "s"} stored in the app`}</div></div>
+      <p className="text-xs text-muted-foreground">Sales and views are 30-day numbers from eBay Analytics — they refresh when you sync. "—" means traffic has never been fetched for that listing. The Ended tab is different: it is not stored rows, it is a live check of eBay right now — offers that were listed before and are now unpublished.</p>
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>
           <TabsTrigger value="active">Active</TabsTrigger>
@@ -91,14 +91,23 @@ function ListingsPage() {
           <div className="mt-4 flex items-center justify-between"><span className="text-sm text-muted-foreground">{`Page ${page + 1} of ${Math.max(1, Math.ceil(rows.length / 50))}`}</span><div className="flex gap-2"><Button variant="outline" size="icon" aria-label="Previous listings" disabled={page === 0} onClick={() => setPage(page - 1)}><ChevronLeft className="h-4 w-4" /></Button><Button variant="outline" size="icon" aria-label="Next listings" disabled={(page + 1) * 50 >= rows.length} onClick={() => setPage(page + 1)}><ChevronRight className="h-4 w-4" /></Button></div></div>
         </TabsContent>
         <TabsContent value="ended" className="mt-4">
+          <div className="mb-3 space-y-1">
+            <p className="text-sm font-medium">{endedLoading ? "Checking your ended listings…" : `${ended.items.length} ended listing${ended.items.length === 1 ? "" : "s"}`}</p>
+            {!endedLoading && ended.total > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Checked {ended.total} item{ended.total === 1 ? "" : "s"} in your eBay inventory just now.
+                {ended.neverPublished > 0 ? ` ${ended.neverPublished} offer${ended.neverPublished === 1 ? "" : "s"} were never published (variants that never went live) — they are not ended listings, so they are not shown here.` : ""}
+              </p>
+            )}
+          </div>
           <Card className="overflow-hidden shadow-[var(--shadow-card)]">
-            {endedLoading ? <div className="p-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /><p className="mt-3 text-sm text-muted-foreground">Checking your ended listings… this takes a few minutes — the app checks every item in your inventory.</p></div> : ended.length === 0 ? (
-              <div className="p-6"><EmptyState icon={RotateCcw} title="No ended listings found" help="eBay marks withdrawn listings as unpublished — this list also includes offers that were never published, because eBay doesn't distinguish the two. Relist creates a draft — it never publishes." /></div>
+            {endedLoading ? <div className="p-10 text-center"><Loader2 className="h-5 w-5 animate-spin mx-auto" /><p className="mt-3 text-sm text-muted-foreground">Checking your ended listings… this takes a few minutes — the app checks every item in your inventory.</p></div> : ended.items.length === 0 ? (
+              <div className="p-6"><EmptyState icon={RotateCcw} title="No ended listings found" help="Ended means an offer that was listed on eBay before and is now unpublished. Offers that were never published are not shown here. Relist creates a draft — it never publishes." /></div>
             ) : (
               <div className="overflow-x-auto">
                 <Table>
                   <TableHeader><TableRow><TableHead className="w-16" /><TableHead>Item</TableHead><TableHead className="hidden sm:table-cell">SKU</TableHead><TableHead>Price</TableHead><TableHead className="hidden md:table-cell">Category</TableHead><TableHead className="w-32" /></TableRow></TableHeader>
-                  <TableBody>{ended.map((o: any) => (
+                  <TableBody>{ended.items.map((o: any) => (
                     <TableRow key={o.offerId}>
                       <TableCell><div className="h-12 w-12 rounded bg-muted overflow-hidden">{o.imageUrl ? <img src={o.imageUrl} alt={o.title} className="h-full w-full object-cover" loading="lazy" /> : null}</div></TableCell>
                       <TableCell className="max-w-xs"><span className="font-medium line-clamp-2">{o.title}</span><div className="text-xs text-muted-foreground">{o.listingId ? `eBay item ${o.listingId}` : "no listing ID (withdrawn)"}</div></TableCell>

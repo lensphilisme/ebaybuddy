@@ -1,6 +1,6 @@
 // @ts-nocheck -- run with `bun test`
 import { describe, expect, test } from "bun:test";
-import { parseMoney, roundMoney, roundToLadder, priceFromRules, floorBindsNote, roundingNote, moneyInputValue } from "./pricing";
+import { parseMoney, roundMoney, roundToLadder, priceFromRules, floorBindsNote, roundingNote, moneyInputValue, loadedMoney } from "./pricing";
 import { sanitizeSku, extractEbayErrorText } from "./ebay/http";
 
 describe("parseMoney (bug 10: $NaN prices)", () => {
@@ -138,5 +138,24 @@ describe("moneyInputValue + roundMoney (float32 artifacts at the form boundary)"
     expect(roundMoney(Number(moneyInputValue(21.989999771118164)))).toBe(21.99);
     expect(roundMoney(0.9900000095367432)).toBe(0.99);
     expect(roundMoney(21.989999771118164)).toBe(21.99);
+  });
+});
+
+describe("loadedMoney (round 2: the LOADED value, not just the display)", () => {
+  test("a draft row carrying a float32 price loads as a clean 2dp number", () => {
+    // The live failure: the Edit dialog DISPLAYED 21.99 while the loaded
+    // value underneath was 21.989999771118164. loadedMoney is the query
+    // boundary that makes the value itself 21.99.
+    expect(loadedMoney(21.989999771118164)).toBe(21.99);
+    expect(loadedMoney(0.9900000095367432)).toBe(0.99);
+    expect(loadedMoney(15.99)).toBe(15.99);
+    expect(loadedMoney(null)).toBe(0);
+    expect(loadedMoney(undefined)).toBe(0);
+  });
+  test("a normalized row feeds the form a clean value", () => {
+    const row = { id: "d1", price: 21.989999771118164 };
+    const loaded = { ...row, price: loadedMoney(row.price) };
+    expect(loaded.price).toBe(21.99);
+    expect(moneyInputValue(loaded.price)).toBe("21.99");
   });
 });

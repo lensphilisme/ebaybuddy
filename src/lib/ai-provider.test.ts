@@ -7,6 +7,8 @@ import {
   validateAiConfig,
   getAiConfigStatus,
   aiSelectionRow,
+  defaultAiStatus,
+  DEFAULT_AI_PROVIDER,
   AiProviderError,
 } from "./ai-provider.server";
 
@@ -129,11 +131,16 @@ describe("getAiConfigStatus (three states)", () => {
     expect(s.source).toBe("user");
   });
 
-  test("no row at all -> not connected, no provider (Local only)", async () => {
+  test("no row at all -> not connected, but the DEFAULT selection (DeepSeek) is still named", async () => {
+    // Round 2: the app HAS a selection even with no row — its own default,
+    // DeepSeek — so Settings, Dashboard and Rules must all agree on
+    // "DeepSeek selected, no key" instead of "Local only" / "none".
     const s = await getAiConfigStatus(userSupabase(null), "u1");
     expect(s.connected).toBe(false);
-    expect(s.provider).toBeUndefined();
-    expect(s.source).toBeNull();
+    expect(s.provider).toBe("deepseek");
+    expect(s.model).toBe("deepseek-v4-flash");
+    expect(s.source).toBe("default");
+    expect(s.keyLast4).toBeUndefined();
   });
 });
 
@@ -149,5 +156,37 @@ describe("aiSelectionRow (save provider choice without a key)", () => {
   });
   test("empty model falls back to the provider default", () => {
     expect(aiSelectionRow("u1", "gemini", "").credentials.model).toBe("gemini-2.5-flash");
+  });
+});
+
+describe("default AI selection (all surfaces agree)", () => {
+  // Settings badge, Dashboard Integrations card and Rules copy all read
+  // the provider from the status — they must agree with each other and
+  // with the Settings dropdown default (DeepSeek) when no row exists.
+  test("the default is DeepSeek with its default model", () => {
+    expect(DEFAULT_AI_PROVIDER).toBe("deepseek");
+    const s = defaultAiStatus();
+    expect(s).toEqual({ connected: false, provider: "deepseek", model: "deepseek-v4-flash", source: "default" });
+  });
+  test("a saved selection row (Gemini, no key) beats the default", async () => {
+    const prevEnvKey = process.env.AI_API_KEY;
+    delete process.env.AI_API_KEY;
+    const s = await getAiConfigStatus(userSupabase({ provider: "gemini", model: "gemini-2.5-flash" }), "u1");
+    expect(s.connected).toBe(false);
+    expect(s.provider).toBe("gemini");
+    expect(s.source).toBe("user");
+    if (prevEnvKey !== undefined) process.env.AI_API_KEY = prevEnvKey;
+  });
+  test("an env key still wins and reports connected", async () => {
+    process.env.AI_API_KEY = "sk-env-test";
+    process.env.AI_PROVIDER = "openai";
+    process.env.AI_MODEL = "gpt-4o-mini";
+    const s = await getAiConfigStatus(userSupabase(null), "u1");
+    expect(s.connected).toBe(true);
+    expect(s.provider).toBe("openai");
+    expect(s.source).toBe("env");
+    delete process.env.AI_API_KEY;
+    delete process.env.AI_PROVIDER;
+    delete process.env.AI_MODEL;
   });
 });

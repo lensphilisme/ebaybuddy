@@ -73,6 +73,22 @@ export function roundMoney(value: number): number {
 }
 
 /**
+ * Load-boundary normalizer for a money value coming back from the DB.
+ * A row written before the money_numeric migration can still hand back
+ * a float32 artifact (21.989999771118164). The DISPLAY was already
+ * rounded (moneyInputValue), but the loaded VALUE in client state
+ * carried the artifact into every other read. Apply this at the query
+ * boundary — where the row enters client state — so the loaded value
+ * is 21.99, not just the formatted text. The next save writes it back
+ * clean (roundMoney on save). The Rules page keeps its raw row on
+ * purpose: storedNeedsRewrite detects the artifact there and a single
+ * Save-all click rewrites it.
+ */
+export function loadedMoney(value: unknown): number {
+  return roundMoney(Number(value ?? 0));
+}
+
+/**
  * Value for a 2-decimal money input when LOADING a stored price. The DB
  * can hand back float32 artifacts (21.989999771118164, 0.9900000095367432)
  * — this is the load boundary that turns them into "21.99" / "0.99" so

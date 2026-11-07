@@ -16,6 +16,7 @@ import {
   type CjWarehouse,
 } from "./cj.server";
 import type { CjInventory } from "./cj-inventory";
+import { DEFAULT_AI_PROVIDER, defaultModelFor, isAiProviderId } from "./ai-provider.server";
 
 async function tok(ctx: any): Promise<string> {
   const token = await getUserCjToken(ctx.supabase, ctx.userId);
@@ -117,15 +118,25 @@ export const getIntegrationStatus = createServerFn({ method: "GET" })
     const cjConnected = cjRow ? !!(cjRow.is_active && (cjRow.credentials?.managed || cjRow.credentials?.api_key)) : !!process.env.CJ_API_KEY;
     const ebayConnected = !!(ebayRow?.is_active && ebayRow.credentials?.refresh_token);
     const aiConnected = !!(aiRow?.is_active && aiRow.credentials?.api_key) || !!(process.env.AI_API_KEY || "").trim();
+    // The AI provider SELECTION and the key are separate facts (same rule
+    // as getAiConfigStatus): with no row and no env key the app still has
+    // a selection — its default, DeepSeek — so the Dashboard names it
+    // ("AI (DeepSeek — no key)") instead of a bare "AI not connected"
+    // while Settings shows DeepSeek selected. connected stays false.
+    const aiProvider = isAiProviderId(aiRow?.credentials?.provider)
+      ? aiRow.credentials.provider
+      : isAiProviderId(process.env.AI_PROVIDER)
+        ? (process.env.AI_PROVIDER as typeof DEFAULT_AI_PROVIDER)
+        : DEFAULT_AI_PROVIDER;
     return {
       cj: { connected: cjConnected, source: cjRow ? "user" : cjConnected ? "env" : null, last: cjRow?.last_validated_at || null },
       ebay: { connected: ebayConnected, source: ebayConnected ? "user" : null, last: ebayRow?.last_validated_at || null },
       ai: {
         connected: aiConnected,
-        provider: aiRow?.credentials?.provider || process.env.AI_PROVIDER || null,
-        model: aiRow?.credentials?.model || process.env.AI_MODEL || null,
+        provider: aiProvider,
+        model: aiRow?.credentials?.model || process.env.AI_MODEL || defaultModelFor(aiProvider),
         keyLast4: aiRow?.credentials?.api_key ? String(aiRow.credentials.api_key).slice(-4) : null,
-        source: aiRow ? "user" : aiConnected ? "env" : null,
+        source: aiRow ? "user" : aiConnected ? "env" : "default",
         last: aiRow?.last_validated_at || null,
       },
     };

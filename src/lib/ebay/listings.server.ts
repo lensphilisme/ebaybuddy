@@ -127,13 +127,16 @@ export type EndedOffer = {
 
 /** Join an UNPUBLISHED offer to its inventory item. Unlike
  * mapOfferToActiveListing, an unpublished offer need not carry a listingId
- * (the listing is withdrawn), so this mapping does not require one. */
+ * (the listing is withdrawn), so this mapping does not require one. A
+ * whitespace-only title (seen live for one SKU) falls back to the SKU so
+ * the row is never blank. */
 export function mapOfferToEndedListing(offer: OfferRecord, item?: InventoryRecord | null): EndedOffer | null {
   const price = offer.pricingSummary?.price;
+  const title = (item?.product?.title || "").trim() || sanitizeSku(offer.sku);
   return {
     offerId: offer.offerId,
     sku: sanitizeSku(offer.sku),
-    title: item?.product?.title || offer.sku,
+    title,
     price: Number(price?.value || 0),
     currency: price?.currency || "USD",
     categoryId: typeof offer.categoryId === "string" ? offer.categoryId : null,
@@ -152,10 +155,15 @@ async function fetchOffersViaInventory<T>(
   // and lists both. Filtering on "ENDED" matched nothing, ever.
   wantedStatus: "PUBLISHED" | "UNPUBLISHED",
   map: (offer: OfferRecord, item: InventoryRecord) => T | null,
-): Promise<{ total: number; items: T[]; skipped: number }> {
+  // Optional extra filter on a matching offer (e.g. Ended wants only
+  // offers that carry a listingId — actually listed before). Rejected
+  // matches are counted as `excluded`, not as `skipped` (bad data).
+  include?: (offer: OfferRecord) => boolean,
+): Promise<{ total: number; items: T[]; skipped: number; excluded: number }> {
   const client = new EbayRestClient(accessToken);
   const items: T[] = [];
   let skipped = 0;
+  let excluded = 0;
   let seen = 0;
   for (let offset = 0; offset < maxItems; offset += 100) {
     const page = await client.json<{ total: number; inventoryItems: InventoryRecord[] }>(
@@ -180,6 +188,10 @@ async function fetchOffersViaInventory<T>(
           continue;
         }
         for (const offer of matching) {
+          if (include && !include(offer)) {
+            excluded += 1;
+            continue;
+          }
           const mapped = map(offer, record);
           if (mapped) items.push(mapped);
           else skipped += 1;
@@ -192,29 +204,42 @@ async function fetchOffersViaInventory<T>(
     }
     if (offset + records.length >= (page.total || 0)) break;
   }
-  return { total: seen, items, skipped };
+  return { total: seen, items, skipped, excluded };
 }
 
 export async function fetchPublishedOffersViaInventory(
   accessToken: string,
   maxItems = 1000,
 ): Promise<{ total: number; items: EbayActiveListing[]; skipped: number }> {
-  return fetchOffersViaInventory(accessToken, maxItems, "PUBLISHED", mapOfferToActiveListing);
+  const { total, items, skipped } = await fetchOffersViaInventory(accessToken, maxItems, "PUBLISHED", mapOfferToActiveListing);
+  return { total, items, skipped };
 }
 
 /**
  * Ended offers, enumerated the same inventory-first way (the unfiltered
  * offer list rejects every page for this account — see above). Used only
  * by the Listings "Ended" view for relisting as drafts; never by the
- * main sync, whose behaviour is unchanged. Matches UNPUBLISHED offers:
- * withdrawn listings land there, and so do offers that were never
- * published — eBay does not distinguish the two.
+ * main sync, whose behaviour is unchanged.
+ *
+ * "Ended" means the offer was ACTUALLY LISTED before and is now
+ * unpublished: UNPUBLISHED *with* a listingId. Matching every UNPUBLISHED
+ * offer listed all 454 inventory items (most were never published —
+ * variants that never went live), which is not "ended". Offers without a
+ * listingId are counted as `neverPublished` and shown separately, never
+ * as ended listings.
  */
 export async function fetchEndedOffersViaInventory(
   accessToken: string,
   maxItems = 1000,
-): Promise<{ total: number; items: EndedOffer[]; skipped: number }> {
-  return fetchOffersViaInventory(accessToken, maxItems, "UNPUBLISHED", mapOfferToEndedListing);
+): Promise<{ total: number; items: EndedOffer[]; skipped: number; neverPublished: number }> {
+  const { total, items, skipped, excluded } = await fetchOffersViaInventory(
+    accessToken,
+    maxItems,
+    "UNPUBLISHED",
+    mapOfferToEndedListing,
+    (offer) => !!offer.listing?.listingId,
+  );
+  return { total, items, skipped, neverPublished: excluded };
 }
 
 export async function fetchActiveEbayListings(

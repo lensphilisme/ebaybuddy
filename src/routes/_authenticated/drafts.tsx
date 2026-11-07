@@ -26,7 +26,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import DOMPurify from "dompurify";
-import { roundMoney, moneyInputValue } from "@/lib/pricing";
+import { roundMoney, moneyInputValue, loadedMoney } from "@/lib/pricing";
 
 export const Route = createFileRoute("/_authenticated/drafts")({ head: () => pageHead("Drafts", "Edit and repair CJ-to-eBay listing drafts."), component: DraftsPage });
 
@@ -182,7 +182,13 @@ function DraftsPage() {
     queryFn: async () => {
       const { data, error } = await supabase.from("listing_drafts").select("*").order("created_at", { ascending: false });
       if (error) throw error;
-      return data || [];
+      // Money load boundary (round 2): a price stored before the
+      // money_numeric migration can still come back as a float32
+      // artifact (21.989999771118164). loadedMoney rounds it HERE, when
+      // the row enters client state, so the LOADED value — not just the
+      // formatted display — is 21.99. The next save writes it back
+      // clean (roundMoney on save).
+      return (data || []).map((d: any) => ({ ...d, price: loadedMoney(d.price) }));
     },
   });
   const selectedIds = useMemo(() => Object.keys(selected).filter((id) => selected[id]), [selected]);

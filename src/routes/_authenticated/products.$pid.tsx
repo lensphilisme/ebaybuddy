@@ -4,7 +4,7 @@ import { AppShell } from "@/components/app-shell";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getCjProduct, getCjFreight, getCjInventory } from "@/lib/cj.functions";
-import { originCountryForVariant, requireFreightOptions } from "@/lib/cj-inventory";
+import { originCountryForVariant, requireFreightOptions, pricedFreightOptions, hasUnpricedFreightOnly, freightPrice } from "@/lib/cj-inventory";
 import { prepareMarketplaceListing } from "@/lib/marketplace.functions";
 import { getSavedMarketplaceLocationLabel } from "@/lib/marketplace-location";
 import { useEffect, useMemo, useState } from "react";
@@ -159,16 +159,22 @@ function ProductDetailPage() {
       setCarrierResetNote("");
     }
   }, [activeVid]); // eslint-disable-line react-hooks/exhaustive-deps
-  // A quote only counts for the variant it was fetched for.
-  const hasQuote = Boolean(freight.data?.length) && quotedVid === activeVid;
-  const carrier = freight.data?.find((o) => o.logisticName === selectedCarrier) ?? freight.data?.[0];
-  const shipping = parseMoney(carrier?.logisticPrice ?? 0);
+  // A quote only counts when a carrier actually carries a PRICE, for the
+  // variant it was fetched for. A $0.00 option is a missing price, not
+  // free shipping (CJ returns null/missing for carriers it cannot price)
+  // — it must not become the carrier, the shipping cost, or the profit
+  // basis, or the shown profit is inflated by the missing freight.
+  const pricedOptions = pricedFreightOptions(freight.data);
+  const hasQuote = pricedOptions.length > 0 && quotedVid === activeVid;
+  const carrier = pricedOptions.find((o) => o.logisticName === selectedCarrier) ?? pricedOptions[0];
+  const shipping = carrier ? freightPrice(carrier) : 0;
+  const unpricedOnly = hasUnpricedFreightOnly(freight.data) && quotedVid === activeVid;
   // Never silently switch carriers: if the user's pick vanished from a
   // fresh quote, say so instead of quietly showing the cheapest.
   useEffect(() => {
-    if (!freight.data?.length) return;
-    if (selectedCarrier && !freight.data.some((o) => o.logisticName === selectedCarrier)) {
-      setCarrierResetNote(`"${selectedCarrier}" wasn't in the new quote — showing ${freight.data[0].logisticName} instead.`);
+    if (!pricedOptions.length) return;
+    if (selectedCarrier && !pricedOptions.some((o) => o.logisticName === selectedCarrier)) {
+      setCarrierResetNote(`"${selectedCarrier}" wasn't in the new quote — showing ${pricedOptions[0].logisticName} instead.`);
     } else {
       setCarrierResetNote("");
     }
@@ -206,7 +212,7 @@ function ProductDetailPage() {
         detail: p,
         itemCost,
         shipping,
-        shippingNote: freight.data?.length ? null : "No freight quote yet — price uses $0 shipping",
+        shippingNote: pricedOptions.length ? null : unpricedOnly ? "Shipping price unavailable — the quote came back without a price" : "No freight quote yet — price uses $0 shipping",
         carrier,
         rules: rules ?? null,
         markupPct,
@@ -323,19 +329,23 @@ function ProductDetailPage() {
                 </Button>
               </div>
               {freight.error && <p className="text-xs text-destructive">{(freight.error as Error).message}</p>}
-              {freight.data && freight.data.length > 0 && (
+              {unpricedOnly && <p className="text-xs text-destructive">Shipping price unavailable — the quote came back but no carrier showed a price. Try a different variant or warehouse; the price below is not usable.</p>}
+              {pricedOptions.length > 0 && (
                 <div>
                   <Label className="text-xs text-muted-foreground">Carrier</Label>
-                  <Select value={selectedCarrier || freight.data[0].logisticName} onValueChange={setSelectedCarrier}>
+                  <Select value={selectedCarrier || pricedOptions[0].logisticName} onValueChange={setSelectedCarrier}>
                     <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      {freight.data.map((o) => (
+                      {pricedOptions.map((o) => (
                         <SelectItem key={o.logisticName} value={o.logisticName}>
                           {o.logisticName} · {o.logisticAging}d · ${parseMoney(o.logisticPrice).toFixed(2)}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  {freight.data && freight.data.length > pricedOptions.length && (
+                    <p className="mt-1 text-xs text-muted-foreground">{freight.data.length - pricedOptions.length} carrier{(freight.data.length - pricedOptions.length) === 1 ? "" : "s"} returned no price and {(freight.data.length - pricedOptions.length) === 1 ? "is" : "are"} not shown.</p>
+                  )}
                 </div>
               )}
             </Card>
@@ -348,7 +358,7 @@ function ProductDetailPage() {
               </div>
               <dl className="grid grid-cols-2 gap-y-1 text-sm">
                 <dt className="text-muted-foreground">Item cost</dt><dd className="text-right">${itemCost.toFixed(2)}</dd>
-                <dt className="text-muted-foreground">+ Shipping ({carrier?.logisticName ?? "—"})</dt><dd className="text-right">${shipping.toFixed(2)}</dd>
+                <dt className="text-muted-foreground">+ Shipping ({carrier?.logisticName ?? "—"})</dt><dd className="text-right">{unpricedOnly ? "price unavailable" : `$${shipping.toFixed(2)}`}</dd>
                 {carrierResetNote && <dd className="col-span-2 text-xs text-amber-600">{carrierResetNote}</dd>}
                 <dt className="font-medium">Landed cost</dt><dd className="text-right font-medium">${landed.toFixed(2)}</dd>
                 <dt className="text-muted-foreground">{markupPct}% markup on landed cost</dt><dd className="text-right">${markupProfit.toFixed(2)}</dd>
@@ -359,7 +369,7 @@ function ProductDetailPage() {
                 <dt className="font-semibold">Profit</dt><dd className={`text-right font-semibold ${actualProfit >= 0 ? "text-success" : "text-destructive"}`}>${actualProfit.toFixed(2)}</dd>
                 {roundingGain > 0.005 && <dd className="col-span-2 text-xs text-muted-foreground">{roundingNote(roundingGain, finalSell, actualProfit)}</dd>}
               </dl>
-              {!hasQuote && <p className="text-xs text-amber-600">Get a shipping quote first — the price needs real freight. The sell price above is an estimate with $0 shipping.</p>}
+              {!hasQuote && <p className="text-xs text-amber-600">{unpricedOnly ? "Shipping price unavailable — the quote came back without a price, so the sell price above is not usable. Try a different variant or warehouse." : "Get a shipping quote first — the price needs real freight. The sell price above is an estimate with $0 shipping."}</p>}
               <Button className="w-full" onClick={() => sendToDraft.mutate()} disabled={sendToDraft.isPending || !hasQuote} title={!hasQuote ? "Get a shipping quote first — the price needs real freight" : undefined}>
                 <FileEdit className="h-4 w-4 mr-1" /> {sendToDraft.isPending ? "Saving…" : "Send to Drafts"}
               </Button>

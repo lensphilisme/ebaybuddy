@@ -238,10 +238,32 @@ describe("ended offers (UNPUBLISHED, not ENDED)", () => {
     };
     const page = await fetchEndedOffersViaInventory("test-token");
     expect(page.total).toBe(3);
-    expect(page.items.map((i) => i.sku).sort()).toEqual(["draft-1", "ended-1"]);
+    // Round 2: only offers that were ACTUALLY LISTED (carry a listingId)
+    // count as ended. The never-published offer is excluded from the
+    // list and counted separately — it must not inflate the Ended tab.
+    expect(page.items.map((i) => i.sku).sort()).toEqual(["ended-1"]);
+    expect(page.neverPublished).toBe(1);
     expect(page.items.find((i) => i.sku === "ended-1")?.listingId).toBe("999");
     expect(page.items.find((i) => i.sku === "ended-1")?.title).toBe("Ended Pet Bed");
-    expect(page.items.find((i) => i.sku === "draft-1")?.listingId).toBeNull();
+    expect(page.items.find((i) => i.sku === "draft-1")).toBeUndefined();
+    globalThis.fetch = realFetch;
+  });
+
+  test("a whitespace-only title falls back to the SKU (no blank row)", async () => {
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith("/inventory_item")) {
+        return Response.json({ total: 1, inventoryItems: [{ sku: "CJPC242270002BY", product: { title: "   ", imageUrls: [] } }] });
+      }
+      if (u.pathname.endsWith("/offer")) {
+        return Response.json({ total: 1, offers: [{ offerId: "o-blank", sku: "CJPC242270002BY", status: "UNPUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "555" }, pricingSummary: { price: { value: "9.99", currency: "USD" } } }] });
+      }
+      return Response.json(inventoryItem);
+    };
+    const page = await fetchEndedOffersViaInventory("test-token");
+    expect(page.items.length).toBe(1);
+    expect(page.items[0].title).toBe("CJPC242270002BY");
+    expect(page.items[0].listingId).toBe("555");
     globalThis.fetch = realFetch;
   });
 

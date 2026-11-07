@@ -61,16 +61,19 @@ export const prepareMarketplaceListing = createServerFn({ method: "POST" })
     if (!detail) throw new Error("CJ product not found.");
     const primaryVariant = detail?.variants?.[0] || detail?.variantList?.[0] || detail?.productVariants?.[0] || null;
     const itemCost = Number(primaryVariant?.variantSellPrice ?? detail?.sellPrice) || 0;
-    // Cheapest CJ freight for the primary variant (0 when CJ has no quote
-    // — the prepared price then uses $0 shipping, same as an unquoted
-    // draft; the toast shows the prepared price so the user can see it).
-    // The quote starts from the warehouse country holding this variant —
-    // a US-warehouse product quoted from CN returns an empty list.
+    // Cheapest PRICED CJ freight for the primary variant (0 when CJ has
+    // no quote — the prepared price then uses $0 shipping, same as an
+    // unquoted draft; the toast shows the prepared price so the user can
+    // see it). A $0.00 option is a missing price, not free shipping, and
+    // must not win as "cheapest". The quote starts from the warehouse
+    // country holding this variant — a US-warehouse product quoted from
+    // CN returns an empty list.
     let shipping = 0;
     let carrier: { logisticName?: string; logisticAging?: string } | null = null;
     try {
       const options = await cjFreightCalculate({ startCountryCode: await cjOriginForVariant(data.cjProductId, primaryVariant?.vid, "US", cjToken), endCountryCode: "US", products: [{ vid: primaryVariant?.vid || "", quantity: 1 }] }, cjToken);
-      const cheapest = (options || []).reduce((best: any, o: any) => (!best || Number(o.logisticPrice) < Number(best.logisticPrice) ? o : best), null);
+      const { cheapestPricedFreightOption } = await import("./cj-inventory");
+      const cheapest = cheapestPricedFreightOption(options || []);
       if (cheapest) {
         shipping = Number(cheapest.logisticPrice) || 0;
         carrier = { logisticName: cheapest.logisticName, logisticAging: cheapest.logisticAging };

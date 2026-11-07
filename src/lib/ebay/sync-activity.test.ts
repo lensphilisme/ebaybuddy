@@ -1,6 +1,6 @@
 // @ts-nocheck -- run with `bun test`
 import { describe, expect, test } from "bun:test";
-import { insertSyncStart, finalizeSyncActivity } from "./sync-activity";
+import { insertSyncStart, finalizeSyncActivity, isSyncLog, lastSyncAt, formatRelativeTime } from "./sync-activity";
 
 /** Minimal in-memory stand-in for the Supabase client the server uses. */
 function stubSupabase() {
@@ -64,5 +64,41 @@ describe("sync activity rows (a reload mid-sync must not lose the sync)", () => 
     expect(db.calls.filter((c) => c.op === "update")).toHaveLength(1);
     expect(db.calls.filter((c) => c.op === "insert")).toHaveLength(1);
     expect(db.rows["row-1"].message).toBe("Sync finished — 0 listings imported.");
+  });
+});
+
+describe("last sync label (round 2: the Dashboard label must use the real last sync)", () => {
+  const now = new Date("2026-11-06T18:29:12-05:00");
+  const logs = [
+    { created_at: "2026-11-06T17:44:51-05:00", category: "ebay", message: "Synced 0 published eBay listings", metadata: { syncStatus: "finished" } },
+    { created_at: "2026-11-06T17:45:12-05:00", category: "ebay", message: "eBay sync started…", metadata: { syncStatus: "started" } },
+    { created_at: "2026-11-06T17:30:00-05:00", category: "ebay", message: "eBay disconnected in Settings", metadata: {} },
+    { created_at: "2026-11-06T18:00:00-05:00", category: "cj", message: "CJ API-key connection verified and saved", metadata: {} },
+  ];
+
+  test("isSyncLog matches sync rows only, not other eBay rows", () => {
+    expect(isSyncLog(logs[0])).toBe(true);
+    expect(isSyncLog(logs[1])).toBe(true);
+    expect(isSyncLog(logs[2])).toBe(false);
+    expect(isSyncLog(logs[3])).toBe(false);
+    expect(isSyncLog(null)).toBe(false);
+  });
+
+  test("lastSyncAt picks the latest sync row, not the latest row overall", () => {
+    // The 5:45 PM started row is later than the 5:44 PM finished row;
+    // the 6:00 PM CJ row and the 5:30 PM disconnect are not syncs.
+    expect(lastSyncAt(logs)).toBe("2026-11-06T17:45:12-05:00");
+    expect(lastSyncAt([])).toBeNull();
+    expect(lastSyncAt(null)).toBeNull();
+  });
+
+  test("formatRelativeTime: the live case — a 5:45 PM sync at 6:29 PM is 44 min ago, not 5 hours", () => {
+    expect(formatRelativeTime("2026-11-06T17:45:12-05:00", now)).toBe("44 min ago");
+    expect(formatRelativeTime("2026-11-06T18:28:30-05:00", now)).toBe("just now");
+    expect(formatRelativeTime("2026-11-06T13:29:00-05:00", now)).toBe("5 hours ago");
+    expect(formatRelativeTime("2026-11-06T17:29:00-05:00", now)).toBe("1 hour ago");
+    expect(formatRelativeTime("2026-11-04T18:29:00-05:00", now)).toBe("2 days ago");
+    expect(formatRelativeTime(null, now)).toBe("never");
+    expect(formatRelativeTime("not-a-date", now)).toBe("never");
   });
 });

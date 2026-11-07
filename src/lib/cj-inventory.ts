@@ -10,6 +10,8 @@
 // (3.3 Query inventory by product ID) and .../api/logistic.html (1.1
 // freightCalculate: startCountryCode = "Country of origin").
 
+import { parseMoney } from "./pricing";
+
 export type CjInventory = {
   inventories?: { countryCode?: string; totalInventoryNum?: number }[];
   variantInventories?: {
@@ -57,4 +59,44 @@ export function requireFreightOptions<T>(options: T[] | null | undefined, origin
   throw new Error(
     `No shipping quote available for this item from the ${originCountry} warehouse — try a different variant or warehouse`,
   );
+}
+
+export type FreightOptionLike = {
+  logisticName?: string;
+  logisticPrice?: number | string | null;
+  logisticAging?: string;
+};
+
+/**
+ * A freight option's price as a number. CJ can return the price as null
+ * or missing, and the product page used to turn that into 0 with
+ * `?? 0` — a $0.00 "DHL" line that is not real freight.
+ */
+export function freightPrice(option: FreightOptionLike | null | undefined): number {
+  return parseMoney(option?.logisticPrice ?? 0);
+}
+
+/**
+ * Only freight options that actually carry a price, cheapest first.
+ * A $0.00 option is NOT free shipping — it is a missing price (CJ
+ * returns null/missing for carriers it cannot price), and treating it
+ * as $0 silently understates the landed cost and inflates the shown
+ * profit. The bulk-send path already filtered price <= 0; this makes
+ * every other caller agree. An option with no price is "price
+ * unavailable", never "$0.00 shipping".
+ */
+export function pricedFreightOptions<T extends FreightOptionLike>(options: T[] | null | undefined): T[] {
+  return (options || [])
+    .filter((o) => freightPrice(o) > 0)
+    .sort((a, b) => freightPrice(a) - freightPrice(b));
+}
+
+/** Cheapest freight option that actually has a price, or null. */
+export function cheapestPricedFreightOption<T extends FreightOptionLike>(options: T[] | null | undefined): T | null {
+  return pricedFreightOptions(options)[0] || null;
+}
+
+/** True when the quote came back with options but none of them has a price. */
+export function hasUnpricedFreightOnly(options: FreightOptionLike[] | null | undefined): boolean {
+  return !!options?.length && pricedFreightOptions(options).length === 0;
 }
