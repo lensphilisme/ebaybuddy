@@ -11,6 +11,7 @@ import {
   ShoppingBag,
   Megaphone,
   Store,
+  LayoutList,
 } from "lucide-react";
 import { type ReactNode } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -25,6 +26,7 @@ const NAV = [
   { to: "/drafts", label: "Drafts", short: "Drafts", icon: FileEdit },
   { to: "/listings", label: "Listings", short: "Listings", icon: Tag },
   { to: "/marketplace", label: "Marketplace", short: "Market", icon: Store },
+  { to: "/facebook-catalog", label: "Facebook Catalog", short: "Catalog", icon: LayoutList },
   { to: "/optimizer", label: "Optimizer", short: "Optimizer", icon: LineChart },
   { to: "/orders", label: "Orders", short: "Orders", icon: ShoppingBag },
   { to: "/marketing", label: "Marketing", short: "Marketing", icon: Megaphone },
@@ -116,7 +118,7 @@ export function AppShell({ children, title, subtitle, actions }: {
           {children}
         </main>
       </div>
-      {/* Mobile bottom nav: 9 items share the width (flex-1, min-w-0) so the
+      {/* Mobile bottom nav: 11 items share the width (flex-1, min-w-0) so the
           nav never scrolls horizontally (bug 21). No overflow-x-auto, short
           labels, icons stay visible on every screen width. */}
       <nav className="fixed inset-x-0 bottom-0 z-40 flex gap-0.5 border-t border-border bg-card/95 px-1 py-1.5 shadow-[var(--shadow-elevated)] backdrop-blur lg:hidden">

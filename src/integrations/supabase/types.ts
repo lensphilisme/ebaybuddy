@@ -313,6 +313,57 @@ export type Database = {
         }
         Relationships: []
       }
+      facebook_catalog_items: {
+        Row: {
+          brand: string
+          condition: string
+          created_at: string
+          currency: string
+          description: string
+          id: string
+          image_link: string
+          included: boolean
+          is_test: boolean
+          link: string
+          medusa_handle: string
+          title: string
+          updated_at: string
+          variants: Json
+        }
+        Insert: {
+          brand?: string
+          condition?: string
+          created_at?: string
+          currency?: string
+          description?: string
+          id?: string
+          image_link?: string
+          included?: boolean
+          is_test?: boolean
+          link: string
+          medusa_handle: string
+          title: string
+          updated_at?: string
+          variants?: Json
+        }
+        Update: {
+          brand?: string
+          condition?: string
+          created_at?: string
+          currency?: string
+          description?: string
+          id?: string
+          image_link?: string
+          included?: boolean
+          is_test?: boolean
+          link?: string
+          medusa_handle?: string
+          title?: string
+          updated_at?: string
+          variants?: Json
+        }
+        Relationships: []
+      }
       integration_credentials: {
         Row: {
           created_at: string

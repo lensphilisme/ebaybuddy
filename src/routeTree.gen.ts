@@ -15,6 +15,7 @@ import { Route as AuthRouteImport } from './routes/auth'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as AuthenticatedDashboardRouteImport } from './routes/_authenticated/dashboard'
 import { Route as AuthenticatedDraftsRouteImport } from './routes/_authenticated/drafts'
+import { Route as AuthenticatedFacebookCatalogRouteImport } from './routes/_authenticated/facebook-catalog'
 import { Route as AuthenticatedListingsRouteImport } from './routes/_authenticated/listings'
 import { Route as AuthenticatedMarketingRouteImport } from './routes/_authenticated/marketing'
 import { Route as AuthenticatedMarketplaceRouteImport } from './routes/_authenticated/marketplace'
@@ -22,6 +23,7 @@ import { Route as AuthenticatedOptimizerRouteImport } from './routes/_authentica
 import { Route as AuthenticatedOrdersRouteImport } from './routes/_authenticated/orders'
 import { Route as AuthenticatedRulesRouteImport } from './routes/_authenticated/rules'
 import { Route as AuthenticatedSettingsRouteImport } from './routes/_authenticated/settings'
+import { Route as ApiFacebookCatalogRouteImport } from './routes/api/facebook-catalog'
 import { Route as EbayCallbackRouteImport } from './routes/ebay.callback'
 import { Route as AuthenticatedProductsIndexRouteImport } from './routes/_authenticated/products.index'
 import { Route as AuthenticatedProductsPidRouteImport } from './routes/_authenticated/products.$pid'
@@ -56,6 +58,12 @@ const AuthenticatedDraftsRoute = AuthenticatedDraftsRouteImport.update({
   path: '/drafts',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const AuthenticatedFacebookCatalogRoute =
+  AuthenticatedFacebookCatalogRouteImport.update({
+    id: '/facebook-catalog',
+    path: '/facebook-catalog',
+    getParentRoute: () => AuthenticatedRouteRoute,
+  } as any)
 const AuthenticatedListingsRoute = AuthenticatedListingsRouteImport.update({
   id: '/listings',
   path: '/listings',
@@ -92,6 +100,11 @@ const AuthenticatedSettingsRoute = AuthenticatedSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const ApiFacebookCatalogRoute = ApiFacebookCatalogRouteImport.update({
+  id: '/api/facebook-catalog',
+  path: '/api/facebook-catalog',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const EbayCallbackRoute = EbayCallbackRouteImport.update({
   id: '/ebay/callback',
   path: '/ebay/callback',
@@ -122,6 +135,7 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/drafts': typeof AuthenticatedDraftsRoute
+  '/facebook-catalog': typeof AuthenticatedFacebookCatalogRoute
   '/listings': typeof AuthenticatedListingsRoute
   '/marketing': typeof AuthenticatedMarketingRoute
   '/marketplace': typeof AuthenticatedMarketplaceRoute
@@ -129,6 +143,7 @@ export interface FileRoutesByFullPath {
   '/orders': typeof AuthenticatedOrdersRoute
   '/rules': typeof AuthenticatedRulesRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/api/facebook-catalog': typeof ApiFacebookCatalogRoute
   '/ebay/callback': typeof EbayCallbackRoute
   '/products/$pid': typeof AuthenticatedProductsPidRoute
   '/products/': typeof AuthenticatedProductsIndexRoute
@@ -140,6 +155,7 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/dashboard': typeof AuthenticatedDashboardRoute
   '/drafts': typeof AuthenticatedDraftsRoute
+  '/facebook-catalog': typeof AuthenticatedFacebookCatalogRoute
   '/listings': typeof AuthenticatedListingsRoute
   '/marketing': typeof AuthenticatedMarketingRoute
   '/marketplace': typeof AuthenticatedMarketplaceRoute
@@ -147,6 +163,7 @@ export interface FileRoutesByTo {
   '/orders': typeof AuthenticatedOrdersRoute
   '/rules': typeof AuthenticatedRulesRoute
   '/settings': typeof AuthenticatedSettingsRoute
+  '/api/facebook-catalog': typeof ApiFacebookCatalogRoute
   '/ebay/callback': typeof EbayCallbackRoute
   '/products/$pid': typeof AuthenticatedProductsPidRoute
   '/products': typeof AuthenticatedProductsIndexRoute
@@ -160,6 +177,7 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/_authenticated/dashboard': typeof AuthenticatedDashboardRoute
   '/_authenticated/drafts': typeof AuthenticatedDraftsRoute
+  '/_authenticated/facebook-catalog': typeof AuthenticatedFacebookCatalogRoute
   '/_authenticated/listings': typeof AuthenticatedListingsRoute
   '/_authenticated/marketing': typeof AuthenticatedMarketingRoute
   '/_authenticated/marketplace': typeof AuthenticatedMarketplaceRoute
@@ -167,6 +185,7 @@ export interface FileRoutesById {
   '/_authenticated/orders': typeof AuthenticatedOrdersRoute
   '/_authenticated/rules': typeof AuthenticatedRulesRoute
   '/_authenticated/settings': typeof AuthenticatedSettingsRoute
+  '/api/facebook-catalog': typeof ApiFacebookCatalogRoute
   '/ebay/callback': typeof EbayCallbackRoute
   '/_authenticated/products/$pid': typeof AuthenticatedProductsPidRoute
   '/_authenticated/products/': typeof AuthenticatedProductsIndexRoute
@@ -180,6 +199,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/dashboard'
     | '/drafts'
+    | '/facebook-catalog'
     | '/listings'
     | '/marketing'
     | '/marketplace'
@@ -187,6 +207,7 @@ export interface FileRouteTypes {
     | '/orders'
     | '/rules'
     | '/settings'
+    | '/api/facebook-catalog'
     | '/ebay/callback'
     | '/products/$pid'
     | '/products/'
@@ -198,6 +219,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/dashboard'
     | '/drafts'
+    | '/facebook-catalog'
     | '/listings'
     | '/marketing'
     | '/marketplace'
@@ -205,6 +227,7 @@ export interface FileRouteTypes {
     | '/orders'
     | '/rules'
     | '/settings'
+    | '/api/facebook-catalog'
     | '/ebay/callback'
     | '/products/$pid'
     | '/products'
@@ -217,6 +240,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/_authenticated/dashboard'
     | '/_authenticated/drafts'
+    | '/_authenticated/facebook-catalog'
     | '/_authenticated/listings'
     | '/_authenticated/marketing'
     | '/_authenticated/marketplace'
@@ -224,6 +248,7 @@ export interface FileRouteTypes {
     | '/_authenticated/orders'
     | '/_authenticated/rules'
     | '/_authenticated/settings'
+    | '/api/facebook-catalog'
     | '/ebay/callback'
     | '/_authenticated/products/$pid'
     | '/_authenticated/products/'
@@ -235,6 +260,7 @@ export interface RootRouteChildren {
   AuthenticatedRouteRoute: typeof AuthenticatedRouteRouteWithChildren
   AuthRoute: typeof AuthRoute
   PrivacyRoute: typeof PrivacyRoute
+  ApiFacebookCatalogRoute: typeof ApiFacebookCatalogRoute
   EbayCallbackRoute: typeof EbayCallbackRoute
   ApiPublicEbayNotificationsRoute: typeof ApiPublicEbayNotificationsRoute
 }
@@ -281,6 +307,13 @@ declare module '@tanstack/react-router' {
       path: '/drafts'
       fullPath: '/drafts'
       preLoaderRoute: typeof AuthenticatedDraftsRouteImport
+      parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/_authenticated/facebook-catalog': {
+      id: '/_authenticated/facebook-catalog'
+      path: '/facebook-catalog'
+      fullPath: '/facebook-catalog'
+      preLoaderRoute: typeof AuthenticatedFacebookCatalogRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
     '/_authenticated/listings': {
@@ -332,6 +365,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedSettingsRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
     }
+    '/api/facebook-catalog': {
+      id: '/api/facebook-catalog'
+      path: '/api/facebook-catalog'
+      fullPath: '/api/facebook-catalog'
+      preLoaderRoute: typeof ApiFacebookCatalogRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/ebay/callback': {
       id: '/ebay/callback'
       path: '/ebay/callback'
@@ -366,6 +406,7 @@ declare module '@tanstack/react-router' {
 interface AuthenticatedRouteRouteChildren {
   AuthenticatedDashboardRoute: typeof AuthenticatedDashboardRoute
   AuthenticatedDraftsRoute: typeof AuthenticatedDraftsRoute
+  AuthenticatedFacebookCatalogRoute: typeof AuthenticatedFacebookCatalogRoute
   AuthenticatedListingsRoute: typeof AuthenticatedListingsRoute
   AuthenticatedMarketingRoute: typeof AuthenticatedMarketingRoute
   AuthenticatedMarketplaceRoute: typeof AuthenticatedMarketplaceRoute
@@ -380,6 +421,7 @@ interface AuthenticatedRouteRouteChildren {
 const AuthenticatedRouteRouteChildren: AuthenticatedRouteRouteChildren = {
   AuthenticatedDashboardRoute: AuthenticatedDashboardRoute,
   AuthenticatedDraftsRoute: AuthenticatedDraftsRoute,
+  AuthenticatedFacebookCatalogRoute: AuthenticatedFacebookCatalogRoute,
   AuthenticatedListingsRoute: AuthenticatedListingsRoute,
   AuthenticatedMarketingRoute: AuthenticatedMarketingRoute,
   AuthenticatedMarketplaceRoute: AuthenticatedMarketplaceRoute,
@@ -399,6 +441,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRouteRoute: AuthenticatedRouteRouteWithChildren,
   AuthRoute: AuthRoute,
   PrivacyRoute: PrivacyRoute,
+  ApiFacebookCatalogRoute: ApiFacebookCatalogRoute,
   EbayCallbackRoute: EbayCallbackRoute,
   ApiPublicEbayNotificationsRoute: ApiPublicEbayNotificationsRoute,
 }
