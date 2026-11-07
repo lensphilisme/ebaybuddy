@@ -151,6 +151,9 @@ describe("Facebook catalog CSV builder", () => {
     expect(variantSizeAndColor({ key: "default", label: "", price: 1, availability: "in_stock" })).toEqual({ size: "", color: "" });
     expect(variantSizeAndColor({ key: "12-inch", label: "12 inch", price: 1, availability: "in_stock" })).toEqual({ size: "12 inch", color: "" });
     expect(variantSizeAndColor({ key: "40to41-gray", label: "40to41 / Gray", price: 1, availability: "in_stock" })).toEqual({ size: "40to41", color: "Gray" });
+    // Live labels put COLOR first ("Gray / 40to41", "Beige orange / 35") — the digit test must still land size and color the right way round.
+    expect(variantSizeAndColor({ key: "gray-40to41", label: "Gray / 40to41", price: 1, availability: "in_stock" })).toEqual({ size: "40to41", color: "Gray" });
+    expect(variantSizeAndColor({ key: "beige-orange-35", label: "Beige orange / 35", price: 1, availability: "in_stock" })).toEqual({ size: "35", color: "Beige orange" });
     expect(variantSizeAndColor({ key: "brown", label: "brown", price: 1, availability: "in_stock" })).toEqual({ size: "", color: "brown" });
     // Live Batana key is the full slug, not just "brown" — the last word still reads as color.
     expect(variantSizeAndColor({ key: "batana-essential-oil-brown", label: "Batana Essential Oil Brown", price: 1, availability: "in_stock" })).toEqual({ size: "", color: "Batana Essential Oil Brown" });

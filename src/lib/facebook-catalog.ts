@@ -141,12 +141,18 @@ const VARIANT_COLOR_WORDS = new Set([
   "green", "grey", "khaki", "natural", "pink", "red", "silver", "white",
 ]);
 
-/** Derive Facebook's `size` and `color` for one variant, so rows sharing an item_group_id show as one product with a picker. Rules: a "SIZE / COLOR" label splits (slippers: "40to41 / Gray"); a variant whose key/label ends in a color word goes to color (Batana "batana-essential-oil-brown" → color "brown"); otherwise the slug key, dashes → spaces, is the size (wigs "12 inch", Eelhoe "1pc", Batana "60ml"). The single "default" variant has neither. */
+/** Derive Facebook's `size` and `color` for one variant, so rows sharing an item_group_id show as one product with a picker. Rules: a "A / B" label splits, and the part WITH digits is the size (the other is the color) — the live labels put color first ("Gray / 40to41", "Beige orange / 35"), so assuming size-first swaps them; a variant whose key/label ends in a color word goes to color (Batana "batana-essential-oil-brown" → color "brown"); otherwise the slug key, dashes → spaces, is the size (wigs "12 inch", Eelhoe "1pc", Batana "60ml"). The single "default" variant has neither. */
 export function variantSizeAndColor(v: FacebookCatalogVariant): { size: string; color: string } {
   const label = String(v.label || "").trim();
   const slash = label.indexOf(" / ");
   if (slash >= 0) {
-    return { size: label.slice(0, slash).trim(), color: label.slice(slash + 3).trim() };
+    const a = label.slice(0, slash).trim();
+    const b = label.slice(slash + 3).trim();
+    const aHasDigit = /\d/.test(a);
+    const bHasDigit = /\d/.test(b);
+    if (aHasDigit && !bHasDigit) return { size: a, color: b };
+    if (bHasDigit && !aHasDigit) return { size: b, color: a };
+    return { size: a, color: b };
   }
   const key = String(v.key || "").trim().toLowerCase();
   if (!key || key === "default") return { size: "", color: "" };
