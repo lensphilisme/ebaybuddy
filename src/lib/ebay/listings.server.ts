@@ -146,18 +146,31 @@ export function mapOfferToEndedListing(offer: OfferRecord, item?: InventoryRecor
 }
 
 /**
- * ONE row per eBay listing in the Ended view (round 3). The inventory
- * enumeration returns one offer per VARIANT — a multi-variant listing is
- * many inventory items / offers sharing one listingId — so counting offers
- * showed 223 "ended listings" for 24 real listings. Group by listingId
- * (fall back to the SKU when an offer somehow has none, so it still forms
- * its own row) and collapse the variants into one row: the first variant
- * supplies the representative title / SKU / price / image, and the row
- * carries every variant SKU + offer ID so Relist can rebuild the draft.
+ * ONE row per eBay listing in the Ended view (round 3 + round 4). The
+ * inventory enumeration returns one offer per VARIANT — a multi-variant
+ * listing is many inventory items / offers — so counting offers showed
+ * 223 "ended listings" for 24 real listings.
+ *
+ * Round 3 grouped by listingId. That is correct for listings THIS app
+ * publishes (one listingId per multi-variation group — see
+ * publish_by_inventory_item_group), but round-4 diagnosis found it does
+ * NOT collapse this account's older listings: they were created by
+ * another tool that gave EVERY variant-offer its own listingId (only two
+ * "-grp" group SKUs exist in the whole account), so grouping by listingId
+ * still returns 223 rows. Variants of one product share the inventory-
+ * item title, and re-lists share it too, so the title is the key that
+ * actually collapses them: group by listingId first (keeps app-published
+ * groups exact), then merge groups that share a normalized title.
  * A listing with several ended variant-offers is ONE ended listing.
+ * Trade-off: two genuinely different listings with the exact same title
+ * merge into one row — the row keeps every SKU / offer ID, so Relist
+ * still works from the representative SKU.
  */
 export type EndedListing = {
   listingId: string;
+  /** Every listingId in this row (one per variant-offer when the other
+   * tool gave each its own). listingId above is the representative. */
+  listingIds: string[];
   title: string;
   /** Representative SKU (first variant) — Relist rebuilds the draft from
    * CJ by this SKU, and buildCjDraftRow restores the full variant set. */
@@ -175,14 +188,28 @@ export type EndedListing = {
   variantCount: number;
 };
 
+/** Normalize an ended-offer title for grouping: case, whitespace and
+ * trailing punctuation must not split one product into two rows. */
+export function normalizeEndedTitle(title: string): string {
+  return (title || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.,;:!?\-–—]+$/, "")
+    .trim();
+}
+
 export function groupEndedOffersByListing(offers: EndedOffer[]): EndedListing[] {
-  const groups = new Map<string, EndedListing>();
+  // Level 1 — group by listingId (fall back to the SKU when an offer
+  // somehow has none, so it still forms its own row).
+  const byListing = new Map<string, EndedListing>();
   for (const o of offers) {
     const key = o.listingId || o.sku;
-    const existing = groups.get(key);
+    const existing = byListing.get(key);
     if (!existing) {
-      groups.set(key, {
+      byListing.set(key, {
         listingId: o.listingId || o.sku,
+        listingIds: o.listingId ? [o.listingId] : [],
         title: o.title,
         sku: o.sku,
         skus: [o.sku],
@@ -199,13 +226,34 @@ export function groupEndedOffersByListing(offers: EndedOffer[]): EndedListing[] 
     }
     existing.skus.push(o.sku);
     existing.offerIds.push(o.offerId);
+    if (o.listingId && !existing.listingIds.includes(o.listingId)) existing.listingIds.push(o.listingId);
     existing.priceMin = Math.min(existing.priceMin, o.price);
     existing.priceMax = Math.max(existing.priceMax, o.price);
     if (!existing.categoryId && o.categoryId) existing.categoryId = o.categoryId;
     if (!existing.imageUrl && o.imageUrl) existing.imageUrl = o.imageUrl;
     existing.variantCount += 1;
   }
-  return Array.from(groups.values());
+  // Level 2 — merge listing-groups that share a normalized title (see
+  // the doc comment above for why listingId alone cannot collapse this
+  // account's older listings).
+  const byTitle = new Map<string, EndedListing>();
+  for (const g of byListing.values()) {
+    const key = normalizeEndedTitle(g.title);
+    const existing = byTitle.get(key);
+    if (!existing) {
+      byTitle.set(key, g);
+      continue;
+    }
+    existing.skus.push(...g.skus);
+    existing.offerIds.push(...g.offerIds);
+    for (const id of g.listingIds) if (!existing.listingIds.includes(id)) existing.listingIds.push(id);
+    existing.priceMin = Math.min(existing.priceMin, g.priceMin);
+    existing.priceMax = Math.max(existing.priceMax, g.priceMax);
+    existing.variantCount += g.variantCount;
+    if (!existing.imageUrl && g.imageUrl) existing.imageUrl = g.imageUrl;
+    if (!existing.categoryId && g.categoryId) existing.categoryId = g.categoryId;
+  }
+  return Array.from(byTitle.values());
 }
 
 async function fetchOffersViaInventory<T>(
@@ -294,6 +342,8 @@ export async function fetchPublishedOffersViaInventory(
  * The returned `items` are grouped by listing (one row per eBay listing,
  * variants collapsed — see groupEndedOffersByListing), so the count
  * matches Seller Hub's listing count instead of counting variant-offers.
+ * Grouping is two-level (listingId, then normalized title) because this
+ * account's older listings carry a distinct listingId per variant-offer.
  */
 export async function fetchEndedOffersViaInventory(
   accessToken: string,

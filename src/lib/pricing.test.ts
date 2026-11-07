@@ -1,6 +1,6 @@
 // @ts-nocheck -- run with `bun test`
 import { describe, expect, test } from "bun:test";
-import { parseMoney, roundMoney, roundToLadder, priceFromRules, floorBindsNote, roundingNote, moneyInputValue, loadedMoney, normalizeRuleMoney, shippingDisplayValue } from "./pricing";
+import { parseMoney, roundMoney, roundToLadder, priceFromRules, floorBindsNote, roundingNote, moneyInputValue, loadedMoney, normalizeRuleMoney, shippingDisplayValue, moneyDisplayValue } from "./pricing";
 import { sanitizeSku, extractEbayErrorText } from "./ebay/http";
 
 describe("parseMoney (bug 10: $NaN prices)", () => {
@@ -219,5 +219,76 @@ describe("round 3: pre-quote shipping is never shown as $0.00", () => {
   test("a quoted $0 is a missing price, never free freight", () => {
     expect(shippingDisplayValue(true, false, 0)).toBe("price unavailable");
     expect(shippingDisplayValue(true, true, 0)).toBe("price unavailable");
+  });
+});
+
+describe("round 4: the full live load chain (price-float diagnosis)", () => {
+  // Round-4 diagnosis, verified against the live evidence: the DB values
+  // are numeric-clean (21.99 / 0.99, confirmed by a read-only SQL check),
+  // the repo load chain below provably yields clean values at EVERY
+  // boundary, there is no float32 transform and no persisted cache in the
+  // app — so a live artifact can only come from stale deployed chunks,
+  // not from this code or the DB. These tests pin the chain so a future
+  // change cannot reintroduce the artifact, and they assert the INPUT's
+  // underlying value (the number/string the field holds), not just the
+  // formatted display — the way the live verifier reads the field.
+  test("Drafts Edit load chain: fresh fetch -> query boundary -> form state -> input value", () => {
+    // Simulate the worst case the app must survive: a fetched row that
+    // still carries the pre-migration float32 artifact.
+    const fetchedFromDb = 21.989999771118164;
+    // Drafts query boundary (drafts.tsx queryFn): loadedMoney.
+    const inClientState = loadedMoney(fetchedFromDb);
+    expect(inClientState).toBe(21.99);
+    // Edit dialog form state (drafts.tsx useEffect): moneyInputValue.
+    const inFormState = moneyInputValue(inClientState);
+    expect(inFormState).toBe("21.99");
+    // The input's underlying value is the form string — exactly "21.99",
+    // never the artifact. The MoneyInput also derives its display through
+    // moneyDisplayValue when the field is not being edited.
+    expect(moneyDisplayValue(inFormState, false)).toBe("21.99");
+    // And even if state somehow held the raw artifact, the display guard
+    // still yields the clean string.
+    expect(moneyDisplayValue(fetchedFromDb, false)).toBe("21.99");
+  });
+
+  test("Rules load chain: fresh fetch -> normalizeRuleMoney -> form state -> input value", () => {
+    const fetchedRow = { id: "r1", min_profit_usd: 9.000000001, round_to: 0.9900000095367432, markup_percent: 35 };
+    const inClientState = normalizeRuleMoney(fetchedRow);
+    expect(inClientState.round_to).toBe(0.99);
+    expect(inClientState.min_profit_usd).toBe(9);
+    // Rules form state (formatValue -> moneyInputValue for step < 1).
+    const inFormState = moneyInputValue(inClientState.round_to);
+    expect(inFormState).toBe("0.99");
+    expect(moneyDisplayValue(inFormState, false)).toBe("0.99");
+    expect(moneyDisplayValue(fetchedRow.round_to, false)).toBe("0.99");
+  });
+
+  test("a clean numeric DB row passes through the whole chain unchanged", () => {
+    // The live DB today: listing_drafts.price 21.99 numeric,
+    // automation_rules.round_to 0.99 numeric.
+    expect(loadedMoney(21.99)).toBe(21.99);
+    expect(moneyInputValue(loadedMoney(21.99))).toBe("21.99");
+    const rule = normalizeRuleMoney({ round_to: 0.99, min_profit_usd: 9 });
+    expect(rule.round_to).toBe(0.99);
+    expect(moneyInputValue(rule.round_to)).toBe("0.99");
+  });
+});
+
+describe("moneyDisplayValue (round 4: the input-level guard)", () => {
+  test("unfocused: always the clean 2dp string, even from an artifact", () => {
+    expect(moneyDisplayValue(21.989999771118164, false)).toBe("21.99");
+    expect(moneyDisplayValue(0.9900000095367432, false)).toBe("0.99");
+    expect(moneyDisplayValue("21.989999771118164", false)).toBe("21.99");
+    expect(moneyDisplayValue(21.99, false)).toBe("21.99");
+    expect(moneyDisplayValue(0.99, false)).toBe("0.99");
+    expect(moneyDisplayValue("", false)).toBe("");
+    expect(moneyDisplayValue(null, false)).toBe("");
+    expect(moneyDisplayValue(undefined, false)).toBe("");
+  });
+  test("focused: the raw string untouched, so typing is never rewritten", () => {
+    expect(moneyDisplayValue("21.9", true)).toBe("21.9");
+    expect(moneyDisplayValue("21.", true)).toBe("21.");
+    expect(moneyDisplayValue("", true)).toBe("");
+    expect(moneyDisplayValue(21.99, true)).toBe("21.99");
   });
 });

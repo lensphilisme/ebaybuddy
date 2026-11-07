@@ -27,6 +27,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { toast } from "sonner";
 import DOMPurify from "dompurify";
 import { roundMoney, moneyInputValue, loadedMoney } from "@/lib/pricing";
+import { MoneyInput } from "@/components/money-input";
 
 export const Route = createFileRoute("/_authenticated/drafts")({ head: () => pageHead("Drafts", "Edit and repair CJ-to-eBay listing drafts."), component: DraftsPage });
 
@@ -602,7 +603,7 @@ function EditDraftDialog({ draft, onOpenChange, onSaved }: { draft: any | null; 
         </DialogHeader>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="space-y-1 md:col-span-2"><span className="text-xs font-medium">Title</span><Input value={form.title || ""} onChange={(e) => setForm((f: any) => ({ ...f, title: e.target.value }))} /></label>
-          <label className="space-y-1"><span className="text-xs font-medium">Price</span><Input type="number" step="0.01" value={form.price || ""} onChange={(e) => setForm((f: any) => ({ ...f, price: e.target.value }))} /></label>
+          <label className="space-y-1"><span className="text-xs font-medium">Price</span><MoneyInput value={form.price || ""} onChange={(v) => setForm((f: any) => ({ ...f, price: v }))} /></label>
           <label className="space-y-1"><span className="text-xs font-medium">eBay category ID</span><Input value={form.category_id || ""} onChange={(e) => setForm((f: any) => ({ ...f, category_id: e.target.value }))} /></label>
           <label className="space-y-1"><span className="text-xs font-medium">Brand</span><Input value={form.brand || ""} onChange={(e) => setForm((f: any) => ({ ...f, brand: e.target.value }))} /></label>
           <label className="space-y-1"><span className="text-xs font-medium">Model</span><Input value={form.model || ""} onChange={(e) => setForm((f: any) => ({ ...f, model: e.target.value }))} /></label>

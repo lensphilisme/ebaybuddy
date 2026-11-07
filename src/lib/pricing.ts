@@ -119,6 +119,25 @@ export function normalizeRuleMoney(row: any): any {
 }
 
 /**
+ * Display value for a money input (round 4 defense-in-depth). When the
+ * field is being edited, show the raw string untouched so typing is never
+ * rewritten mid-keystroke. When it is NOT being edited, always show the
+ * 2dp form — so even if client state somehow holds a float32 artifact
+ * (21.989999771118164), the INPUT can never display it. The load
+ * boundaries (loadedMoney / normalizeRuleMoney / moneyInputValue) already
+ * keep state clean; this is the last line of defence at the input itself.
+ * Round-4 diagnosis: the repo load chain provably yields clean values
+ * (see the round-4 regression tests), the DB is numeric-clean, and there
+ * is no float32 transform or persisted cache in the app — so a live
+ * artifact can only come from stale deployed chunks, which this guard
+ * also neutralises once the new code is live.
+ */
+export function moneyDisplayValue(value: unknown, focused: boolean): string {
+  if (focused) return value == null ? "" : String(value);
+  return moneyInputValue(value);
+}
+
+/**
  * What the product-detail "+ Shipping" line shows (round 3). Before any
  * quote is run there is NO shipping figure — showing "$0.00" presents a
  * missing price as free freight. So: no quote yet -> "not quoted yet";

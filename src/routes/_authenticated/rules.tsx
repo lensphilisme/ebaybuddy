@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getAiProviderStatus } from "@/lib/ai-provider.functions";
 import { moneyInputValue, loadedMoney, normalizeRuleMoney } from "@/lib/pricing";
+import { MoneyInput } from "@/components/money-input";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -235,6 +236,10 @@ function storedNeedsRewrite(raw: unknown, step: number): boolean {
 function Field({ label, value, onChange, step = 1, hint }: { label: string; value: string; onChange: (v: string) => void; step?: number; hint?: string }) {
   // Money-style fields (step < 1, e.g. Round to .99) come back from the DB
   // as float32 artifacts like 0.9900000095367432 — display and save them at
-  // 2 decimals so the artifact never leaks into the input (bug 11).
-  return <div className="space-y-1"><Label>{label}</Label><Input type="number" step={step} value={value} onChange={(e) => onChange(e.target.value)} className="min-w-0 flex-1" />{hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}</div>;
+  // 2 decimals so the artifact never leaks into the input (bug 11). The
+  // MoneyInput (round 4) is the last line of defence: its displayed value
+  // always passes through moneyInputValue when the field is not being
+  // edited, so the artifact cannot show even if state somehow holds it.
+  // Integer fields keep the plain input — their values have no artifacts.
+  return <div className="space-y-1"><Label>{label}</Label>{step < 1 ? <MoneyInput value={value} onChange={onChange} step={step} className="min-w-0 flex-1" /> : <Input type="number" step={step} value={value} onChange={(e) => onChange(e.target.value)} className="min-w-0 flex-1" />}{hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}</div>;
 }

@@ -358,3 +358,118 @@ describe("ended offers grouped by listing (round 3)", () => {
     globalThis.fetch = realFetch;
   });
 });
+
+describe("ended offers grouped by title (round 4)", () => {
+  // Round-4 diagnosis: the live account's older listings were created by
+  // another tool that gave EVERY variant-offer its own listingId (only two
+  // "-grp" group SKUs exist in the whole account), so grouping by
+  // listingId alone returned 223 rows for ~24 real listings. Variants of
+  // one product share the inventory-item title, so the title is the key
+  // that actually collapses them.
+  test("variant-offers with DISTINCT listingIds but one title collapse to ONE ended listing", () => {
+    const offers = [
+      { offerId: "o-a", sku: "CJPB111", title: "Pet Bed", price: 10, currency: "USD", categoryId: "1", listingId: "111", imageUrl: "https://example.com/a.jpg" },
+      { offerId: "o-b", sku: "CJPB112", title: "Pet Bed", price: 12, currency: "USD", categoryId: "1", listingId: "222" },
+      { offerId: "o-c", sku: "CJPB113", title: "Pet Bed", price: 11, currency: "USD", categoryId: "1", listingId: "333" },
+      { offerId: "o-d", sku: "CJPB114", title: "Cat Toy", price: 20, currency: "USD", categoryId: "2", listingId: "444" },
+    ];
+    const grouped = groupEndedOffersByListing(offers as any);
+    // 4 variant-offers, 4 distinct listingIds — but only 2 PRODUCTS.
+    expect(grouped.length).toBe(2);
+    const bed = grouped.find((g) => g.title === "Pet Bed")!;
+    expect(bed.variantCount).toBe(3);
+    expect(bed.skus).toEqual(["CJPB111", "CJPB112", "CJPB113"]);
+    expect(bed.offerIds).toEqual(["o-a", "o-b", "o-c"]);
+    expect(bed.listingIds).toEqual(["111", "222", "333"]);
+    expect(bed.priceMin).toBe(10);
+    expect(bed.priceMax).toBe(12);
+    expect(bed.listingId).toBe("111");
+    expect(grouped.find((g) => g.title === "Cat Toy")?.variantCount).toBe(1);
+  });
+
+  test("the live shape: 223 offers with distinct listingIds across 24 titles collapse to 24", () => {
+    const offers: any[] = [];
+    for (let t = 0; t < 24; t++) {
+      const variants = t === 0 ? 16 : 9; // 16 + 23*9 = 223
+      for (let v = 0; v < variants; v++) {
+        offers.push({
+          offerId: `o-${t}-${v}`,
+          sku: `CJPB${String(t).padStart(2, "0")}${String(v).padStart(2, "0")}`,
+          title: `Pet Product ${t + 1}`,
+          price: 10 + v,
+          currency: "USD",
+          categoryId: "1",
+          listingId: `L-${t}-${v}`,
+        });
+      }
+    }
+    expect(offers.length).toBe(223);
+    // ListingId-only grouping (round 3) would still return 223 rows.
+    expect(new Set(offers.map((o) => o.listingId)).size).toBe(223);
+    const grouped = groupEndedOffersByListing(offers);
+    expect(grouped.length).toBe(24);
+    expect(grouped.reduce((n, g) => n + g.variantCount, 0)).toBe(223);
+    expect(grouped[0].variantCount).toBe(16);
+    expect(grouped[0].priceMin).toBe(10);
+    expect(grouped[0].priceMax).toBe(25);
+    expect(grouped[0].skus.length).toBe(16);
+    expect(grouped[0].listingIds.length).toBe(16);
+  });
+
+  test("title normalization: case, whitespace and trailing punctuation do not split a product", () => {
+    const offers = [
+      { offerId: "o-1", sku: "s-1", title: "Pet Bed", price: 10, currency: "USD", categoryId: "1", listingId: "A" },
+      { offerId: "o-2", sku: "s-2", title: "pet bed", price: 12, currency: "USD", categoryId: "1", listingId: "B" },
+      { offerId: "o-3", sku: "s-3", title: "  Pet   Bed. ", price: 11, currency: "USD", categoryId: "1", listingId: "C" },
+    ];
+    const grouped = groupEndedOffersByListing(offers as any);
+    expect(grouped.length).toBe(1);
+    expect(grouped[0].variantCount).toBe(3);
+  });
+
+  test("different titles stay separate even when prices match", () => {
+    const offers = [
+      { offerId: "o-1", sku: "s-1", title: "Dog Bed Blue", price: 10, currency: "USD", categoryId: "1", listingId: "A" },
+      { offerId: "o-2", sku: "s-2", title: "Dog Bed Red", price: 10, currency: "USD", categoryId: "1", listingId: "B" },
+    ];
+    expect(groupEndedOffersByListing(offers as any).length).toBe(2);
+  });
+
+  test("fetchEndedOffersViaInventory collapses distinct-listingId variants of one title", async () => {
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url));
+      if (u.pathname.endsWith("/inventory_item")) {
+        return Response.json({
+          total: 3,
+          inventoryItems: [
+            { sku: "var-a", product: { title: "Multi-variant Bed", imageUrls: ["https://example.com/a.jpg"] } },
+            { sku: "var-b", product: { title: "Multi-variant Bed" } },
+            { sku: "solo-1", product: { title: "Solo Toy" } },
+          ],
+        });
+      }
+      if (u.pathname.endsWith("/offer")) {
+        const sku = u.searchParams.get("sku");
+        // Same title, DIFFERENT listingIds — the live shape round 3 missed.
+        if (sku === "var-a") {
+          return Response.json({ total: 1, offers: [{ offerId: "o-a", sku: "var-a", status: "UNPUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "L-A" }, pricingSummary: { price: { value: "10.00", currency: "USD" } } }] });
+        }
+        if (sku === "var-b") {
+          return Response.json({ total: 1, offers: [{ offerId: "o-b", sku: "var-b", status: "UNPUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "L-B" }, pricingSummary: { price: { value: "12.00", currency: "USD" } } }] });
+        }
+        return Response.json({ total: 1, offers: [{ offerId: "o-solo", sku: "solo-1", status: "UNPUBLISHED", marketplaceId: "EBAY_US", listing: { listingId: "L-C" }, pricingSummary: { price: { value: "20.00", currency: "USD" } } }] });
+      }
+      return Response.json(inventoryItem);
+    };
+    const page = await fetchEndedOffersViaInventory("test-token");
+    expect(page.total).toBe(3);
+    // 3 inventory items, 3 distinct listingIds — but only 2 PRODUCTS.
+    expect(page.items.length).toBe(2);
+    const bed = page.items.find((i) => i.title === "Multi-variant Bed")!;
+    expect(bed.variantCount).toBe(2);
+    expect(bed.priceMin).toBe(10);
+    expect(bed.priceMax).toBe(12);
+    expect(bed.listingIds).toEqual(["L-A", "L-B"]);
+    globalThis.fetch = realFetch;
+  });
+});
