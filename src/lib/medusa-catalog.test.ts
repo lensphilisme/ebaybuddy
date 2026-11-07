@@ -35,11 +35,25 @@ function variant(title: string, usdCents: number, opts: { qty?: number; manage?:
 function product(partial: Partial<MedusaStoreProduct> & { handle: string; title: string }): MedusaStoreProduct {
   return { status: "published", variants: [], images: [], ...partial };
 }
-function mockFetchAll(all: MedusaStoreProduct[], opts: { pageSize?: number; status?: number } = {}) {
+function mockFetchAll(all: MedusaStoreProduct[], opts: { pageSize?: number; status?: number; regions?: { id: string; currency_code: string }[] | null; regionsStatus?: number } = {}) {
   const seen: { url: string; headers: any }[] = [];
   const pageSize = opts.pageSize ?? 100;
+  // Default regions mirror the real Lisays store: Europe (EUR) first,
+  // United States (USD) second — the sync must pick the USD one.
+  const regions = opts.regions === undefined
+    ? [{ id: "reg_eu", currency_code: "eur" }, { id: "reg_us", currency_code: "usd" }]
+    : opts.regions;
   const fetchImpl = (async (url: string, init: any) => {
     seen.push({ url, headers: init?.headers });
+    if (url.includes("/store/regions")) {
+      if (opts.regionsStatus && opts.regionsStatus !== 200) {
+        return new Response("{}", { status: opts.regionsStatus, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ regions: regions ?? [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     if (opts.status && opts.status !== 200) {
       return new Response("{}", { status: opts.status, headers: { "Content-Type": "application/json" } });
     }
@@ -212,13 +226,54 @@ describe("fetchMedusaProducts", () => {
     const { fetchImpl, seen } = mockFetchAll(all, { pageSize: 2 });
     const got = await fetchMedusaProducts("pk_test_key", fetchImpl);
     expect(got.map((p) => p.handle)).toEqual(["a", "b", "c"]);
-    expect(seen).toHaveLength(2);
-    expect(seen[0].url).toContain("/store/products?limit=100&offset=0");
-    expect(seen[1].url).toContain("offset=2");
+    // First call resolves the region, then the two product pages.
+    expect(seen).toHaveLength(3);
+    expect(seen[0].url).toContain("/store/regions");
+    const productCalls = seen.slice(1);
+    expect(productCalls[0].url).toContain("/store/products?limit=100&offset=0");
+    expect(productCalls[1].url).toContain("offset=2");
     for (const s of seen) {
       expect(s.headers["x-publishable-api-key"]).toBe("pk_test_key");
       expect(s.url).not.toContain("pk_test_key");
     }
+  });
+
+  test("passes the USD region id so the API returns prices (the real store returns NO prices without region_id)", async () => {
+    const all = [product({ handle: "a", title: "A" })];
+    const { fetchImpl, seen } = mockFetchAll(all);
+    await fetchMedusaProducts("pk_test_key", fetchImpl);
+    const productCalls = seen.filter((s) => s.url.includes("/store/products"));
+    expect(productCalls).toHaveLength(1);
+    // The mock regions are Europe (EUR) then United States (USD) — the
+    // USD one must win, not the first region.
+    expect(productCalls[0].url).toContain("region_id=reg_us");
+  });
+
+  test("no USD region → falls back to the first region; regions call failing → no region_id (old behavior)", async () => {
+    const all = [product({ handle: "a", title: "A" })];
+    const eurOnly = mockFetchAll(all, { regions: [{ id: "reg_eu", currency_code: "eur" }] });
+    await fetchMedusaProducts("pk_test_key", eurOnly.fetchImpl);
+    expect(eurOnly.seen.filter((s) => s.url.includes("/store/products"))[0].url).toContain("region_id=reg_eu");
+    const regionsFail = mockFetchAll(all, { regionsStatus: 500 });
+    await fetchMedusaProducts("pk_test_key", regionsFail.fetchImpl);
+    const noRegionUrl = regionsFail.seen.filter((s) => s.url.includes("/store/products"))[0].url;
+    expect(noRegionUrl).not.toContain("region_id");
+  });
+
+  test("the mapper reads the real API shape: calculated_price only, no prices array", async () => {
+    // Mirrors the live /store/products response with region_id: variants
+    // carry only calculated_price (USD, cents) — no `prices` array.
+    const realShape = product({
+      handle: "african-women-wig-long-straight-hair-lace-hair-cover",
+      title: "African Women Wig Long Straight Hair Lace Hair Cover",
+      variants: ["14 inch", "16 inch"].map((t) => ({
+        title: t,
+        calculated_price: { calculated_amount: 3747, currency_code: "usd" },
+      })),
+    });
+    const { row, skipReason } = mapMedusaProductToCatalogRow(realShape);
+    expect(skipReason).toBeNull();
+    expect(row?.variants).toEqual([{ key: "default", label: "", price: 37.47, availability: "in_stock" }]);
   });
 
   test("a 401 becomes a plain-language key error", async () => {

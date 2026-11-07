@@ -183,19 +183,63 @@ export function mapMedusaProductToCatalogRow(product: MedusaStoreProduct): { row
   };
 }
 
+/** One region from the Medusa Store API (GET /store/regions). */
+export type MedusaStoreRegion = { id?: string; currency_code?: string };
+
+/**
+ * Resolve the USD region id for price calculation. The Store API only
+ * returns variant prices (calculated_price) for a region — without a
+ * region_id it returns NO prices at all for this store, so every
+ * product maps to "no USD price" and the sync skips everything
+ * (verified live Nov 6, 2026: 0 of 301 variants had any price data
+ * without region_id; all 301 had USD calculated_price with the US
+ * region). The Lisays store has two regions (Europe/EUR, United
+ * States/USD); the feed is USD, so the US region is the right one.
+ * Falls back to the first region when there is no USD region, and to
+ * null (no region_id — the old behavior) when the regions call fails.
+ */
+export async function fetchUsdRegionId(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), MEDUSA_FETCH_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetchImpl(`${MEDUSA_STORE_API_BASE}/store/regions`, {
+        headers: { "x-publishable-api-key": apiKey, Accept: "application/json" },
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) return null;
+    const body: any = await res.json();
+    const regions: MedusaStoreRegion[] = Array.isArray(body?.regions) ? body.regions : [];
+    const usd = regions.find((r) => typeof r?.currency_code === "string" && r.currency_code.toLowerCase() === "usd" && r.id);
+    if (usd?.id) return usd.id;
+    const first = regions.find((r) => r?.id);
+    return first?.id || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Fetch ALL products from the Medusa Store API, following offset
- * pagination (limit 100 per page). Throws a plain-language error when
- * the store does not answer, the key is rejected, or the response is
- * not usable — the caller turns that into a message and changes
- * nothing.
+ * pagination (limit 100 per page). Prices are region-calculated, so
+ * the USD region id (from fetchUsdRegionId) is passed as region_id —
+ * without it the API returns no prices at all for this store. Throws
+ * a plain-language error when the store does not answer, the key is
+ * rejected, or the response is not usable — the caller turns that
+ * into a message and changes nothing.
  */
 export async function fetchMedusaProducts(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<MedusaStoreProduct[]> {
   const products: MedusaStoreProduct[] = [];
+  const regionId = await fetchUsdRegionId(apiKey, fetchImpl);
+  const regionQuery = regionId ? `&region_id=${encodeURIComponent(regionId)}` : "";
   let offset = 0;
   let total = Infinity;
   while (offset < total) {
-    const url = `${MEDUSA_STORE_API_BASE}/store/products?limit=${MEDUSA_PAGE_SIZE}&offset=${offset}`;
+    const url = `${MEDUSA_STORE_API_BASE}/store/products?limit=${MEDUSA_PAGE_SIZE}&offset=${offset}${regionQuery}`;
     let res: Response;
     try {
       const controller = new AbortController();
