@@ -249,6 +249,14 @@ describe("fetchMedusaProducts", () => {
     expect(productCalls[0].url).toContain("region_id=reg_us");
   });
 
+  test("asks for variants.inventory_quantity so stock levels come back (without it every variant looks in stock)", async () => {
+    const all = [product({ handle: "a", title: "A" })];
+    const { fetchImpl, seen } = mockFetchAll(all);
+    await fetchMedusaProducts("pk_test_key", fetchImpl);
+    const productCalls = seen.filter((s) => s.url.includes("/store/products"));
+    expect(productCalls[0].url).toContain("fields=%2Bvariants.inventory_quantity");
+  });
+
   test("no USD region → falls back to the first region; regions call failing → no region_id (old behavior)", async () => {
     const all = [product({ handle: "a", title: "A" })];
     const eurOnly = mockFetchAll(all, { regions: [{ id: "reg_eu", currency_code: "eur" }] });

@@ -227,19 +227,24 @@ export async function fetchUsdRegionId(apiKey: string, fetchImpl: typeof fetch =
  * Fetch ALL products from the Medusa Store API, following offset
  * pagination (limit 100 per page). Prices are region-calculated, so
  * the USD region id (from fetchUsdRegionId) is passed as region_id —
- * without it the API returns no prices at all for this store. Throws
- * a plain-language error when the store does not answer, the key is
- * rejected, or the response is not usable — the caller turns that
- * into a message and changes nothing.
+ * without it the API returns no prices at all for this store. The
+ * fields param also asks for variants.inventory_quantity, because
+ * without it the API omits stock levels entirely and every variant
+ * looks in stock — the sync would then collapse multi-variant
+ * products and lose real out-of-stock data. Throws a plain-language
+ * error when the store does not answer, the key is rejected, or the
+ * response is not usable — the caller turns that into a message and
+ * changes nothing.
  */
 export async function fetchMedusaProducts(apiKey: string, fetchImpl: typeof fetch = fetch): Promise<MedusaStoreProduct[]> {
   const products: MedusaStoreProduct[] = [];
   const regionId = await fetchUsdRegionId(apiKey, fetchImpl);
   const regionQuery = regionId ? `&region_id=${encodeURIComponent(regionId)}` : "";
+  const fieldsQuery = `&fields=${encodeURIComponent("+variants.inventory_quantity")}`;
   let offset = 0;
   let total = Infinity;
   while (offset < total) {
-    const url = `${MEDUSA_STORE_API_BASE}/store/products?limit=${MEDUSA_PAGE_SIZE}&offset=${offset}${regionQuery}`;
+    const url = `${MEDUSA_STORE_API_BASE}/store/products?limit=${MEDUSA_PAGE_SIZE}&offset=${offset}${regionQuery}${fieldsQuery}`;
     let res: Response;
     try {
       const controller = new AbortController();
