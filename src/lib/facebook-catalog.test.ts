@@ -7,6 +7,7 @@ import {
   catalogItemRows,
   csvCell,
   normalizeCatalogItem,
+  variantSizeAndColor,
   FACEBOOK_CATALOG_CSV_HEADERS,
   type FacebookCatalogItem,
 } from "./facebook-catalog";
@@ -113,7 +114,44 @@ describe("Facebook catalog CSV builder", () => {
   test("header is exactly Facebook's required columns, in order", () => {
     const rows = parseCsv(buildFacebookCatalogCsv(SEEDED));
     expect(rows[0]).toEqual([...FACEBOOK_CATALOG_CSV_HEADERS]);
-    expect(rows[0]).toEqual(["id", "title", "description", "link", "image_link", "price", "availability", "condition", "brand"]);
+    expect(rows[0]).toEqual(["id", "title", "description", "link", "image_link", "price", "availability", "condition", "brand", "item_group_id", "size", "color"]);
+  });
+
+  test("variants group: every row of one product shares its item_group_id (the handle)", () => {
+    const rows = parseCsv(buildFacebookCatalogCsv(SEEDED)).slice(1);
+    // Columns: 0 id, 9 item_group_id, 10 size, 11 color.
+    for (const r of rows) {
+      const handle = r[0].includes("__") ? r[0].slice(0, r[0].indexOf("__")) : r[0];
+      expect(r[9]).toBe(handle);
+    }
+    const wigGroups = new Set(rows.filter((r) => r[9].startsWith("wigs-real-hair")).map((r) => r[9]));
+    expect(wigGroups).toEqual(new Set(["wigs-real-hair-india-hair-ladies-water-wave-hair-hair"]));
+    const batanaGroups = new Set(rows.filter((r) => r[9].startsWith("batana")).map((r) => r[9]));
+    expect(batanaGroups).toEqual(new Set(["batana-oil-hair-care-essential-oil-batana-oil-hair-oil"]));
+  });
+
+  test("size and color are what the picker offers: wig length, oil pack/size, slipper size + color", () => {
+    const rows = parseCsv(buildFacebookCatalogCsv(SEEDED)).slice(1);
+    const byId = new Map(rows.map((r) => [r[0], r]));
+    expect(byId.get("wigs-real-hair-india-hair-ladies-water-wave-hair-hair__12-inch")?.slice(10)).toEqual(["12 inch", ""]);
+    expect(byId.get("wigs-real-hair-india-hair-ladies-water-wave-hair-hair__26-inch")?.slice(10)).toEqual(["26 inch", ""]);
+    expect(byId.get("eelhoe-ginger-hair-essential-oil-eelhoe-ginger-hair-essential-oil__1pc")?.slice(10)).toEqual(["1pc", ""]);
+    expect(byId.get("eelhoe-ginger-hair-essential-oil-eelhoe-ginger-hair-essential-oil__4pcs")?.slice(10)).toEqual(["4pcs", ""]);
+    expect(byId.get("batana-oil-hair-care-essential-oil-batana-oil-hair-oil__60ml")?.slice(10)).toEqual(["60ml", ""]);
+    expect(byId.get("batana-oil-hair-care-essential-oil-batana-oil-hair-oil__brown")?.slice(10)).toEqual(["", "brown"]);
+    expect(byId.get("batana-oil-hair-care-essential-oil-batana-oil-hair-oil__set1")?.slice(10)).toEqual(["set1", ""]);
+    expect(byId.get("cute-cartoon-cotton-slippers-thick-bottom-home-slippers-fashion-floor-bedroom-sl__40to41-gray")?.slice(10)).toEqual(["40to41", "Gray"]);
+    expect(byId.get("cute-cartoon-cotton-slippers-thick-bottom-home-slippers-fashion-floor-bedroom-sl__44to45-pink")?.slice(10)).toEqual(["44to45", "Pink"]);
+    // Single-variant products: group is the handle, no size/color.
+    expect(byId.get("african-women-wig-long-straight-hair-lace-hair-cover")?.slice(9)).toEqual(["african-women-wig-long-straight-hair-lace-hair-cover", "", ""]);
+    expect(byId.get("women-shoes-female-casual-shoes")?.slice(9)).toEqual(["women-shoes-female-casual-shoes", "", ""]);
+  });
+
+  test("variantSizeAndColor unit cases", () => {
+    expect(variantSizeAndColor({ key: "default", label: "", price: 1, availability: "in_stock" })).toEqual({ size: "", color: "" });
+    expect(variantSizeAndColor({ key: "12-inch", label: "12 inch", price: 1, availability: "in_stock" })).toEqual({ size: "12 inch", color: "" });
+    expect(variantSizeAndColor({ key: "40to41-gray", label: "40to41 / Gray", price: 1, availability: "in_stock" })).toEqual({ size: "40to41", color: "Gray" });
+    expect(variantSizeAndColor({ key: "brown", label: "brown", price: 1, availability: "in_stock" })).toEqual({ size: "", color: "brown" });
   });
 
   test("the 6 real products produce 50 feed rows (1 + 30 + 4 + 6 + 8 + 1)", () => {

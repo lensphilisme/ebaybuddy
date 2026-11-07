@@ -56,6 +56,15 @@ export const FACEBOOK_CATALOG_CSV_HEADERS = [
   "availability",
   "condition",
   "brand",
+  // Variant grouping: every row of one product shares its
+  // item_group_id (the product handle), so Facebook shows the variants
+  // as ONE product with a picker instead of one product per variant.
+  // `size` / `color` are what the picker offers (wig length, oil pack,
+  // slipper size + color). A single-variant product has its handle as
+  // its group and empty size/color.
+  "item_group_id",
+  "size",
+  "color",
 ] as const;
 
 export type FacebookCatalogAvailability = "in_stock" | "out_of_stock";
@@ -126,6 +135,25 @@ function catalogDescription(description: string): string {
   return text.length > 5000 ? `${text.slice(0, 4999)}…` : text;
 }
 
+/** Color words a variant key/label can be, so a color-only variant (Batana "brown") lands in `color`, not `size`. */
+const VARIANT_COLOR_WORDS = new Set([
+  "black", "blonde", "blue", "brown", "clear", "coffee", "gold", "gray",
+  "green", "grey", "khaki", "natural", "pink", "red", "silver", "white",
+]);
+
+/** Derive Facebook's `size` and `color` for one variant, so rows sharing an item_group_id show as one product with a picker. Rules: a "SIZE / COLOR" label splits (slippers: "40to41 / Gray"); a color-only key/label goes to color (Batana "brown"); otherwise the slug key, dashes → spaces, is the size (wigs "12 inch", Eelhoe "1pc", Batana "60ml"). The single "default" variant has neither. */
+export function variantSizeAndColor(v: FacebookCatalogVariant): { size: string; color: string } {
+  const label = String(v.label || "").trim();
+  const slash = label.indexOf(" / ");
+  if (slash >= 0) {
+    return { size: label.slice(0, slash).trim(), color: label.slice(slash + 3).trim() };
+  }
+  const key = String(v.key || "").trim().toLowerCase();
+  if (!key || key === "default") return { size: "", color: "" };
+  if (VARIANT_COLOR_WORDS.has(key)) return { size: "", color: label || key };
+  return { size: key.replace(/-/g, " ").trim(), color: "" };
+}
+
 /** Expand one catalog item into its feed rows (one per variant entry). Rows with no usable price are skipped, never shipped as $0.00. */
 export function catalogItemRows(item: FacebookCatalogItem): string[][] {
   const variants = item.variants.length > 0 ? item.variants : [];
@@ -133,6 +161,7 @@ export function catalogItemRows(item: FacebookCatalogItem): string[][] {
     .filter((v) => Number.isFinite(v.price) && v.price > 0)
     .map((v) => {
       const isDefault = variants.length === 1 && v.key === "default";
+      const { size, color } = variantSizeAndColor(v);
       return [
         isDefault ? item.medusa_handle : `${item.medusa_handle}__${v.key}`,
         isDefault || !v.label ? item.title : `${item.title} — ${v.label}`,
@@ -143,6 +172,9 @@ export function catalogItemRows(item: FacebookCatalogItem): string[][] {
         v.availability,
         item.condition || "new",
         item.brand || FACEBOOK_CATALOG_BRAND,
+        item.medusa_handle,
+        size,
+        color,
       ];
     });
 }
